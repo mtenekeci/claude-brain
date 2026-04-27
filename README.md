@@ -12,7 +12,7 @@ Claude's Obsidian second brain — persistent, project-isolated context across s
 ## Requirements
 
 - [Claude Code](https://claude.ai/code) CLI installed
-- [Obsidian](https://obsidian.md) with a vault at `~/Documents/Claude Brain/claude-brain/`
+- [Obsidian](https://obsidian.md) with a vault at `~/Documents/claude-brain/`
 
 ## Install
 
@@ -57,7 +57,7 @@ claude
 ```
 
 Claude asks for the project name and type, then:
-- Creates `~/Documents/Claude Brain/claude-brain/projects/my-app/`
+- Creates `~/Documents/claude-brain/projects/my-app/`
 - Writes `CLAUDE.md` to `~/Projects/my-app/`
 - Installs the `PreCompact` hook in `.claude/settings.json`
 
@@ -92,7 +92,7 @@ Run `/brain init` from any directory and choose `topic` when asked. To load cont
 ## Vault structure
 
 ```
-~/Documents/Claude Brain/claude-brain/
+~/Documents/claude-brain/
 ├── _system/
 │   ├── BRAIN.md              ← vault operating instructions
 │   └── project-index.md      ← registry of all projects
