@@ -50,6 +50,13 @@ Always use Obsidian wikilinks when referencing other vault files. This builds th
 
 **Never use plain text** where a wikilink could go. Every connection you write becomes an edge in the Obsidian graph.
 
+**Contextual wikilinks (apply during init seeding and sync only):**
+When writing or updating vault content during `/brain init` Step G or `/brain sync`, scan prose sections (State, Active Work, Decisions, Open Questions) for plain mentions of known project slugs. Known slugs come from the `project-index.md` you already read — no extra file read.
+
+For each slug found as a standalone word (not already inside `[[...]]`, not inside code blocks or frontmatter): replace with `[[projects/<slug>/context\|<slug>]]`.
+
+This runs only on writes, never on session-start reads — zero token cost at load time.
+
 ---
 
 ## /brain init
@@ -199,14 +206,15 @@ If the derived slug already appears in the table as a row value, stop and say:
    ```
    Extract: project purpose, description, any documented features.
 
-   **Step D — Read git history**
+   **Step D — Read git history and remote**
 
    ```bash
    git log --oneline -30 2>/dev/null
    git log --oneline --since="90 days ago" 2>/dev/null | wc -l
    git branch -a 2>/dev/null
+   git remote get-url origin 2>/dev/null
    ```
-   Extract: what has been built (commit messages), how active the project is, feature branches.
+   Extract: what has been built (commit messages), how active the project is, feature branches. If a remote URL is returned, store it as `REPO_URL` — used in the `repo:` frontmatter field and breadcrumb link. If no remote, `REPO_URL` is unset.
 
    **Step E — Read existing CLAUDE.md**
 
@@ -229,6 +237,10 @@ If the derived slug already appears in the table as a row value, stop and say:
 
    **Step G — Synthesize and write context.md**
 
+   Construct the breadcrumb line:
+   - Base: `← [[_system/project-index|Project Index]] | [[projects/<slug>/log|Session Log]]`
+   - If `REPO_URL` is set: append ` | [GitHub ↗](<REPO_URL>)`
+
    Using all gathered sources, write `<VAULT_ROOT>/projects/<slug>/context.md` with the following structure. Fill every section with real information — no placeholder text for existing projects:
 
    ```markdown
@@ -236,8 +248,12 @@ If the derived slug already appears in the table as a row value, stop and say:
    project: <slug>
    type: <code or topic>
    path: <absolute path or —>
+   repo: <REPO_URL or — if none>
    updated: <YYYY-MM-DD>
+   up: "[[_system/project-index]]"
    ---
+
+   <breadcrumb line>
 
    ## State
    <2-3 sentences synthesized from README + git log + CLAUDE.md:
@@ -266,6 +282,8 @@ If the derived slug already appears in the table as a row value, stop and say:
    <from CLAUDE.md constraints section or memory if any.
    If none found, write "None documented yet.">
    ```
+
+   After writing, apply contextual wikilinks (see Linking rules) to all prose sections.
 
    For a brand new empty project (Step A returned no existing work): use the template defaults with a shallow top-level file listing under Architecture.
 
@@ -399,6 +417,8 @@ If count > 150:
 - In `## Architecture`, remove any bullet that describes something no longer in the codebase
 
 Update the frontmatter `updated:` field to today's date in `YYYY-MM-DD`.
+
+Apply contextual wikilinks (see Linking rules) to all updated prose sections.
 
 Write the result back to `VAULT_PROJECT/context.md`.
 

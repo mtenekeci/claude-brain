@@ -2,6 +2,7 @@
 project: {slug}
 type: {type}
 path: {path}
+repo: —
 updated: {date}
 up: "[[_system/project-index]]"
 ---
