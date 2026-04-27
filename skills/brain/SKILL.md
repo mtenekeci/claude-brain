@@ -51,7 +51,10 @@ Always use Obsidian wikilinks when referencing other vault files. This builds th
 **Never use plain text** where a wikilink could go. Every connection you write becomes an edge in the Obsidian graph.
 
 **Contextual wikilinks (apply during init seeding and sync only):**
-When writing or updating vault content during `/brain init` Step G or `/brain sync`, scan prose sections (State, Active Work, Decisions, Open Questions) for plain mentions of known project slugs. Known slugs come from the `project-index.md` you already read — no extra file read.
+When writing or updating vault content during `/brain init` Step G or `/brain sync`, scan prose sections (State, Active Work, Decisions, Open Questions) for plain mentions of any slug in `KNOWN_SLUGS`.
+
+- `/brain init`: `KNOWN_SLUGS` comes from `project-index.md` read during the "Check for duplicate slug" step — no extra read needed.
+- `/brain sync`: `KNOWN_SLUGS` comes from the explicit "Load known slugs" step at the start of sync.
 
 For each slug found as a standalone word (not already inside `[[...]]`, not inside code blocks or frontmatter): replace with `[[projects/<slug>/context\|<slug>]]`.
 
@@ -401,6 +404,10 @@ If found: read the `vault:` line, extract the slug as the last path segment.
 If not found: ask "Which project slug should I sync? (run `/brain status` to list all)"
 
 Set `VAULT_PROJECT = <VAULT_ROOT>/projects/<slug>`
+
+### Load known slugs
+
+Read `<VAULT_ROOT>/_system/project-index.md` and extract all project slugs from the table. Store as `KNOWN_SLUGS` — used for contextual wikilinks when updating content.
 
 ### Update context.md
 
