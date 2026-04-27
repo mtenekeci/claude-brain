@@ -31,6 +31,27 @@ VAULT_PROJECTS = <VAULT_ROOT>/projects
 
 ---
 
+## Linking rules (apply when writing any vault file)
+
+Always use Obsidian wikilinks when referencing other vault files. This builds the graph view automatically.
+
+| What you're writing | Link format |
+|---|---|
+| Reference to a project's context | `[[projects/<slug>/context\|<slug>]]` |
+| Reference to a project's log | `[[projects/<slug>/log\|<slug> log]]` |
+| Reference to project index | `[[_system/project-index\|Project Index]]` |
+| Cross-project reference in context.md | `[[projects/<other-slug>/context\|<other-slug>]]` |
+
+**When to add links:**
+- `context.md` — link any mentioned related projects using `[[projects/<slug>/context\|<slug>]]`
+- `log.md` — link to `context.md` at the top (already in template)
+- `project-index.md` — every slug cell is a wikilink (handled in `/brain init` and `/brain sync`)
+- Decisions section — if a decision relates to another project, link it
+
+**Never use plain text** where a wikilink could go. Every connection you write becomes an edge in the Obsidian graph.
+
+---
+
 ## /brain init
 
 Initialize a new project in the vault and wire up session automation.
@@ -131,8 +152,8 @@ If it does NOT exist:
    ```markdown
    # Project Index
 
-   | slug | type | path | last-active |
-   |------|------|------|-------------|
+   | project | type | path | last-active |
+   |---------|------|------|-------------|
    ```
 
 ### Check for duplicate slug
@@ -257,8 +278,9 @@ If the derived slug already appears in the table as a row value, stop and say:
 
 4. Append to `<VAULT_ROOT>/_system/project-index.md`:
    ```
-   | <slug> | <type> | <absolute path or —> | <YYYY-MM-DD> |
+   | [[projects/<slug>/context\|<slug>]] | <type> | <absolute path or —> | <YYYY-MM-DD> |
    ```
+   The `\|` escapes the pipe inside the Obsidian wikilink so the table renders correctly. The link points to the project's `context.md` and displays as the slug.
 
 ### If code project: write CLAUDE.md to project folder
 

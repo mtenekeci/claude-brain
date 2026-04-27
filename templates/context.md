@@ -3,7 +3,10 @@ project: {slug}
 type: {type}
 path: {path}
 updated: {date}
+up: "[[_system/project-index]]"
 ---
+
+← [[_system/project-index|Project Index]] | [[projects/{slug}/log|Session Log]]
 
 ## State
 Project initialized. No sessions recorded yet.

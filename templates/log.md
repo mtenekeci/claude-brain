@@ -1,3 +1,5 @@
+← [[projects/{slug}/context|{slug} context]]
+
 ## {date} · Session 1
 Completed: Project initialized in vault
 Changed: —
