@@ -4,7 +4,7 @@
   "description": "Obsidian second brain for Claude — persistent, project-isolated context across sessions",
   "owner": {
     "name": "Mehmet Tenekeci",
-    "email": "Mehmet.Tenekeci@imtf.com"
+    "email": "mehmet@tenekeci.ch"
   },
   "plugins": [
     {
@@ -13,7 +13,7 @@
       "source": "./",
       "author": {
         "name": "Mehmet Tenekeci",
-        "email": "Mehmet.Tenekeci@imtf.com"
+        "email": "mehmet@tenekeci.ch"
       }
     }
   ]
