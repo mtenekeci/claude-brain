@@ -145,19 +145,114 @@ If the derived slug already appears in the table as a row value, stop and say:
 
 1. Create directory: `<VAULT_ROOT>/projects/<slug>/`
 
-2. Write `context.md`:
-   - Read `~/.claude/plugins/claude-brain/templates/context.md`
-   - Replace `{slug}` with the slug
-   - Replace `{type}` with `code` or `topic`
-   - Replace `{path}` with the absolute current working directory (if code project), or `—` (if topic)
-   - Replace `{date}` with today's date in `YYYY-MM-DD` format
-   - If code project: list the top-level files and folders in the current directory as bullets under `## Architecture`, replacing the placeholder comment
-   - Write the result to `<VAULT_ROOT>/projects/<slug>/context.md`
+2. Seed `context.md` — gather existing project knowledge before writing:
+
+   **Step A — Detect if this is an existing project**
+
+   Run:
+   ```bash
+   git -C . rev-parse --is-inside-work-tree 2>/dev/null && echo "has_git" || echo "no_git"
+   find . -maxdepth 1 -not -name '.' -not -name '.git' -not -name '.claude' 2>/dev/null | wc -l
+   ```
+   If `has_git` OR file count > 2 → existing project. Use full seeding below.
+   If brand new empty folder → use template with shallow listing (skip to Step G).
+
+   **Step B — Read project manifest / tech stack**
+
+   Try each in order, use the first that exists:
+   ```bash
+   cat package.json 2>/dev/null
+   cat pyproject.toml 2>/dev/null
+   cat Cargo.toml 2>/dev/null
+   cat go.mod 2>/dev/null
+   cat composer.json 2>/dev/null
+   cat pom.xml 2>/dev/null
+   cat build.gradle 2>/dev/null
+   ```
+   Extract: project name (if different from slug), language/runtime, key dependencies.
+
+   **Step C — Read README**
+
+   ```bash
+   cat README.md 2>/dev/null || cat README.rst 2>/dev/null || cat README 2>/dev/null
+   ```
+   Extract: project purpose, description, any documented features.
+
+   **Step D — Read git history**
+
+   ```bash
+   git log --oneline -30 2>/dev/null
+   git log --oneline --since="90 days ago" 2>/dev/null | wc -l
+   git branch -a 2>/dev/null
+   ```
+   Extract: what has been built (commit messages), how active the project is, feature branches.
+
+   **Step E — Read existing CLAUDE.md**
+
+   ```bash
+   cat CLAUDE.md 2>/dev/null
+   ```
+   If it exists, extract any documented decisions, constraints, or context already written there. This is the highest-signal source — treat it as ground truth.
+
+   **Step F — Read Claude's memory for this project**
+
+   Compute the memory path: take the absolute current working directory, remove the leading `/`, replace all remaining `/` with `-`.
+   Example: `/Users/mehmet/Projects/my-app` → `Users-mehmet-Projects-my-app`
+   Memory path: `~/.claude/projects/<encoded-path>/memory/`
+
+   ```bash
+   ls ~/.claude/projects/<encoded-path>/memory/ 2>/dev/null
+   cat ~/.claude/projects/<encoded-path>/memory/*.md 2>/dev/null
+   ```
+   If memory files exist, extract any project facts, decisions, or context stored there.
+
+   **Step G — Synthesize and write context.md**
+
+   Using all gathered sources, write `<VAULT_ROOT>/projects/<slug>/context.md` with the following structure. Fill every section with real information — no placeholder text for existing projects:
+
+   ```markdown
+   ---
+   project: <slug>
+   type: <code or topic>
+   path: <absolute path or —>
+   updated: <YYYY-MM-DD>
+   ---
+
+   ## State
+   <2-3 sentences synthesized from README + git log + CLAUDE.md:
+   what the project is, what is working, what stage it is at>
+
+   ## Architecture
+   <bullets from file structure + manifest:
+   - key directories and what they contain
+   - tech stack and runtime
+   - notable dependencies>
+
+   ## Active Work
+   <from last 5-10 git commits or CLAUDE.md active work:
+   what appears to be currently in progress>
+
+   ## Decisions
+   <from CLAUDE.md, git commit messages, memory:
+   up to 5 notable past decisions with one-line rationale each.
+   If none found, write "None documented yet.">
+
+   ## Open Questions
+   <from CLAUDE.md or memory if any were recorded.
+   If none found, write "None yet.">
+
+   ## Constraints
+   <from CLAUDE.md constraints section or memory if any.
+   If none found, write "None documented yet.">
+   ```
+
+   For a brand new empty project (Step A returned no existing work): use the template defaults with a shallow top-level file listing under Architecture.
 
 3. Write `log.md`:
    - Read `~/.claude/plugins/claude-brain/templates/log.md`
    - Replace `{date}` with today's date in `YYYY-MM-DD` format
    - Replace `{slug}` with the slug
+   - If existing project: replace the "Project initialized" Completed line with a one-sentence summary of what was found (e.g. "Seeded from existing project — 47 commits, React/TypeScript app for X")
    - Write the result to `<VAULT_ROOT>/projects/<slug>/log.md`
 
 4. Append to `<VAULT_ROOT>/_system/project-index.md`:
