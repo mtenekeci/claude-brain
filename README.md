@@ -68,7 +68,7 @@ Every future session in `~/Projects/my-app/` auto-loads vault context.
 Run `/brain init` from any directory and choose `topic` when asked. To load context later:
 
 ```
-/brain load imtf-auth-redesign
+/brain load auth-redesign
 ```
 
 ### Check current brain state
