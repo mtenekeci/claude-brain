@@ -1,6 +1,6 @@
 # Brain: {project-name}
 
-vault: ~/Documents/Claude Brain/claude-brain/projects/{slug}
+vault: {vault-root}/projects/{slug}
 
 ## Session start protocol
 1. Read `context.md` in full

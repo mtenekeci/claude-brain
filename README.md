@@ -29,9 +29,21 @@ The `/brain` command is now available in every session on this machine.
 
 The vault directory must exist before first use:
 
-1. Open Obsidian
-2. Create a new vault named `claude-brain` at `~/Documents/Claude Brain/`
-3. Run `/brain init` in any project folder — the `_system/` structure is created automatically on first run
+1. Open Obsidian and create a vault anywhere you like
+2. Run `/brain init` — on first run it asks for your vault path (default: `~/Documents/Claude Brain/claude-brain`)
+3. The `_system/` structure is created automatically inside your vault
+
+The vault path is saved to `~/.claude/brain.config` and reused for all future commands. To change it later:
+
+```
+/brain config set /path/to/your/vault
+```
+
+To check the current config:
+
+```
+/brain config
+```
 
 ## Usage
 
@@ -68,6 +80,12 @@ Run `/brain init` from any directory and choose `topic` when asked. To load cont
 
 ```
 /brain sync
+```
+
+### Change vault location
+
+```
+/brain config set /new/path/to/vault
 ```
 
 ## Vault structure

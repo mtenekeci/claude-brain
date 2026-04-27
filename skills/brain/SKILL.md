@@ -1,17 +1,32 @@
 ---
 name: brain
-description: Use when the user types /brain, /brain init, /brain load, /brain sync, or /brain status. Manages Claude's Obsidian second brain for persistent project context across sessions.
+description: Use when the user types /brain, /brain init, /brain load, /brain sync, /brain status, or /brain config. Manages Claude's Obsidian second brain for persistent project context across sessions.
 ---
 
 # Brain — Obsidian Second Brain
 
-## Constants
+## Config resolution (run at the start of every command)
 
+Config file: `~/.claude/brain.config`
+
+Format:
+```json
+{
+  "vault": "/absolute/path/to/your/obsidian/vault"
+}
 ```
-VAULT_ROOT     = ~/Documents/Claude Brain/claude-brain
+
+**Steps:**
+1. Check if `~/.claude/brain.config` exists.
+2. If it exists: read the file, set `VAULT_ROOT` to the `vault` field value.
+3. If it does NOT exist (first run): this is handled inside `/brain init` — see the "Resolve vault path" step there. For all other commands (`load`, `sync`, `status`), if config is missing, say: "Brain is not configured yet. Run `/brain init` first."
+
+Derived constants (set after reading config):
+```
+VAULT_ROOT     = <vault field from config>
 PLUGIN_DIR     = ~/.claude/plugins/claude-brain
-VAULT_SYSTEM   = ~/Documents/Claude Brain/claude-brain/_system
-VAULT_PROJECTS = ~/Documents/Claude Brain/claude-brain/projects
+VAULT_SYSTEM   = <VAULT_ROOT>/_system
+VAULT_PROJECTS = <VAULT_ROOT>/projects
 ```
 
 ---
@@ -19,6 +34,24 @@ VAULT_PROJECTS = ~/Documents/Claude Brain/claude-brain/projects
 ## /brain init
 
 Initialize a new project in the vault and wire up session automation.
+
+### Resolve vault path
+
+Check if `~/.claude/brain.config` exists.
+
+If it does NOT exist:
+1. Ask: "Where is your Obsidian vault? (press Enter for default: `~/Documents/Claude Brain/claude-brain`)"
+2. If the user presses Enter or provides no input, use `~/Documents/Claude Brain/claude-brain` as the path.
+3. Expand `~` to the absolute home directory path.
+4. Write `~/.claude/brain.config`:
+   ```json
+   {
+     "vault": "<absolute vault path>"
+   }
+   ```
+5. Set `VAULT_ROOT` to that path.
+
+If it already exists: read it, set `VAULT_ROOT` from the `vault` field. Skip the prompt.
 
 ### Gather project details
 
@@ -31,14 +64,14 @@ Examples: `"My App"` → `my-app`, `"IMTF Auth Redesign"` → `imtf-auth-redesig
 
 ### Ensure vault is initialized
 
-Check if `~/Documents/Claude Brain/claude-brain/_system/` exists.
+Check if `<VAULT_ROOT>/_system/` exists.
 
 If it does NOT exist:
-1. Create directory `~/Documents/Claude Brain/claude-brain/_system/`
-2. Create directory `~/Documents/Claude Brain/claude-brain/projects/`
+1. Create directory `<VAULT_ROOT>/_system/`
+2. Create directory `<VAULT_ROOT>/projects/`
 3. Read `~/.claude/plugins/claude-brain/templates/BRAIN.md` verbatim.
-   Write it to `~/Documents/Claude Brain/claude-brain/_system/BRAIN.md`.
-4. Write `~/Documents/Claude Brain/claude-brain/_system/project-index.md`:
+   Write it to `<VAULT_ROOT>/_system/BRAIN.md`.
+4. Write `<VAULT_ROOT>/_system/project-index.md`:
    ```markdown
    # Project Index
 
@@ -48,13 +81,13 @@ If it does NOT exist:
 
 ### Check for duplicate slug
 
-Read `_system/project-index.md`.
+Read `<VAULT_ROOT>/_system/project-index.md`.
 If the derived slug already appears in the table as a row value, stop and say:
 > "Project '`<slug>`' already exists in the vault. Use `/brain status` to see its current state, or choose a different name."
 
 ### Create project in vault
 
-1. Create directory: `~/Documents/Claude Brain/claude-brain/projects/<slug>/`
+1. Create directory: `<VAULT_ROOT>/projects/<slug>/`
 
 2. Write `context.md`:
    - Read `~/.claude/plugins/claude-brain/templates/context.md`
@@ -63,15 +96,15 @@ If the derived slug already appears in the table as a row value, stop and say:
    - Replace `{path}` with the absolute current working directory (if code project), or `—` (if topic)
    - Replace `{date}` with today's date in `YYYY-MM-DD` format
    - If code project: list the top-level files and folders in the current directory as bullets under `## Architecture`, replacing the placeholder comment
-   - Write the result to `~/Documents/Claude Brain/claude-brain/projects/<slug>/context.md`
+   - Write the result to `<VAULT_ROOT>/projects/<slug>/context.md`
 
 3. Write `log.md`:
    - Read `~/.claude/plugins/claude-brain/templates/log.md`
    - Replace `{date}` with today's date in `YYYY-MM-DD` format
    - Replace `{slug}` with the slug
-   - Write the result to `~/Documents/Claude Brain/claude-brain/projects/<slug>/log.md`
+   - Write the result to `<VAULT_ROOT>/projects/<slug>/log.md`
 
-4. Append to `_system/project-index.md`:
+4. Append to `<VAULT_ROOT>/_system/project-index.md`:
    ```
    | <slug> | <type> | <absolute path or —> | <YYYY-MM-DD> |
    ```
@@ -81,7 +114,8 @@ If the derived slug already appears in the table as a row value, stop and say:
 1. Read `~/.claude/plugins/claude-brain/templates/CLAUDE.md`
 2. Replace `{project-name}` with the display name
 3. Replace `{slug}` with the slug
-4. Target path: `<current working directory>/CLAUDE.md`
+4. Replace `{vault-root}` with the absolute `VAULT_ROOT` path
+5. Target path: `<current working directory>/CLAUDE.md`
    - If `CLAUDE.md` does not exist: write the file directly
    - If `CLAUDE.md` already exists: prepend the brain section followed by `\n---\n` before the existing content. Do not remove existing content.
 
@@ -121,8 +155,9 @@ Print:
 ```
 Brain initialized for <project-name> (<slug>)
 
-Vault context:  ~/Documents/Claude Brain/claude-brain/projects/<slug>/context.md
-Vault log:      ~/Documents/Claude Brain/claude-brain/projects/<slug>/log.md
+Vault:          <VAULT_ROOT>
+Context:        <VAULT_ROOT>/projects/<slug>/context.md
+Log:            <VAULT_ROOT>/projects/<slug>/log.md
 ```
 
 If code project, also print:
@@ -144,13 +179,14 @@ To load this project in any session: /brain load <slug>
 
 Load a topic project's context into the current session. For topic projects only — code projects auto-load via CLAUDE.md.
 
-1. Set `VAULT_PROJECT = ~/Documents/Claude Brain/claude-brain/projects/<slug>`
-2. Check if `VAULT_PROJECT/context.md` exists.
-   If not: "Project '`<slug>`' not found. Available projects are listed in `_system/project-index.md`. Run `/brain init` to create a new one."
-3. Read `VAULT_PROJECT/context.md` in full.
-4. Read `VAULT_PROJECT/log.md` — find the last `## ` header in the file and extract from that header to the end of the file. This is the last session entry.
-5. Hold both in working context for this session.
-6. Print:
+1. Resolve vault path (see Config resolution at top).
+2. Set `VAULT_PROJECT = <VAULT_ROOT>/projects/<slug>`
+3. Check if `VAULT_PROJECT/context.md` exists.
+   If not: "Project '`<slug>`' not found. Available projects are listed in `<VAULT_ROOT>/_system/project-index.md`. Run `/brain init` to create a new one."
+4. Read `VAULT_PROJECT/context.md` in full.
+5. Read `VAULT_PROJECT/log.md` — find the last `## ` header in the file and extract from that header to the end of the file. This is the last session entry.
+6. Hold both in working context for this session.
+7. Print:
    ```
    Loaded: <slug>
 
@@ -163,13 +199,17 @@ Load a topic project's context into the current session. For topic projects only
 
 Force a vault write for the current project. Use before a risky change, before a long break, or before switching projects.
 
+### Resolve vault path
+
+See Config resolution at top.
+
 ### Identify current project
 
 Check the current working directory for a `CLAUDE.md` file.
 If found: read the `vault:` line, extract the slug as the last path segment.
 If not found: ask "Which project slug should I sync? (run `/brain status` to list all)"
 
-Set `VAULT_PROJECT = ~/Documents/Claude Brain/claude-brain/projects/<slug>`
+Set `VAULT_PROJECT = <VAULT_ROOT>/projects/<slug>`
 
 ### Update context.md
 
@@ -205,7 +245,7 @@ Next: <what comes next>
 
 ### Update project-index.md
 
-In `_system/project-index.md`, find the row for this slug and update the `last-active` column to today's date.
+In `<VAULT_ROOT>/_system/project-index.md`, find the row for this slug and update the `last-active` column to today's date.
 
 ### Confirm
 
@@ -222,10 +262,14 @@ Session:      <N+1> logged to log.md
 
 Show the current brain state for this session.
 
+### Resolve vault path
+
+See Config resolution at top.
+
 ### Identify current project
 
-Same logic as `/brain sync` — check CLAUDE.md in current directory for the `vault:` line.
-If no project found: read `_system/project-index.md` and print all registered projects, then ask which to inspect.
+Check CLAUDE.md in current directory for the `vault:` line, extract slug as last path segment.
+If no project found: read `<VAULT_ROOT>/_system/project-index.md` and print all registered projects, then ask which to inspect.
 
 ### Read and display
 
@@ -236,6 +280,7 @@ Print:
 ```
 Brain status: <project-name> (<slug>)
 Type:         <code or topic>
+Vault:        <VAULT_ROOT>
 Updated:      <updated date from frontmatter>
 Sessions:     <N>
 Context size: <line count> / 150 lines
@@ -252,3 +297,37 @@ Context size: <line count> / 150 lines
 ── Last Session ───────────────────────
 <last log.md entry>
 ```
+
+---
+
+## /brain config
+
+Show or update the vault path.
+
+### /brain config (no args) — show current config
+
+1. Check if `~/.claude/brain.config` exists.
+2. If yes: read and print:
+   ```
+   Brain config: ~/.claude/brain.config
+   Vault: <vault path>
+   ```
+3. If no: "Brain is not configured. Run `/brain init` to set up."
+
+### /brain config set <path>
+
+Update the vault path.
+
+1. Expand `~` to absolute home directory path.
+2. Check that the path exists as a directory. If not: "Path does not exist: `<path>`. Create the directory or check the path and try again."
+3. Write `~/.claude/brain.config`:
+   ```json
+   {
+     "vault": "<absolute path>"
+   }
+   ```
+4. Print:
+   ```
+   Vault path updated: <path>
+   Config saved to ~/.claude/brain.config
+   ```
