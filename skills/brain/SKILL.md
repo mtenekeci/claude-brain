@@ -19,7 +19,7 @@ Format:
 **Steps:**
 1. Check if `~/.claude/brain.config` exists.
 2. If it exists: read the file, set `VAULT_ROOT` to the `vault` field value.
-3. If it does NOT exist (first run): this is handled inside `/brain init` — see the "Resolve vault path" step there. For all other commands (`load`, `sync`, `status`), if config is missing, say: "Brain is not configured yet. Run `/brain init` first."
+3. If it does NOT exist (first run): this is handled inside `/brain init` — see the "Resolve vault path" step there which auto-discovers vaults. For all other commands (`load`, `sync`, `status`), if config is missing, say: "Brain is not configured yet. Run `/brain init` first."
 
 Derived constants (set after reading config):
 ```
@@ -39,19 +39,75 @@ Initialize a new project in the vault and wire up session automation.
 
 Check if `~/.claude/brain.config` exists.
 
-If it does NOT exist:
-1. Ask: "Where is your Obsidian vault? (press Enter for default: `~/Documents/Claude Brain/claude-brain`)"
-2. If the user presses Enter or provides no input, use `~/Documents/Claude Brain/claude-brain` as the path.
-3. Expand `~` to the absolute home directory path.
-4. Write `~/.claude/brain.config`:
-   ```json
-   {
-     "vault": "<absolute vault path>"
-   }
-   ```
-5. Set `VAULT_ROOT` to that path.
+If it already exists: read it, set `VAULT_ROOT` from the `vault` field. Skip everything below.
 
-If it already exists: read it, set `VAULT_ROOT` from the `vault` field. Skip the prompt.
+If it does NOT exist (first run):
+
+**Step 1 — Detect OS**
+
+Run: `uname -s`
+- Output `Darwin` → macOS
+- Output `Linux` → Linux
+- Otherwise → treat as Linux
+
+**Step 2 — Scan for existing Obsidian vaults**
+
+Search for directories containing a `.obsidian/` subdirectory in these locations (in order):
+
+macOS scan paths:
+```
+~/Documents/
+~/
+~/Desktop/
+~/Library/Mobile Documents/iCloud~md~obsidian/Documents/
+```
+
+Linux scan paths:
+```
+~/Documents/
+~/
+```
+
+For each scan path, run (example for `~/Documents/`):
+```bash
+find ~/Documents -maxdepth 2 -name ".obsidian" -type d 2>/dev/null | sed 's|/.obsidian$||'
+```
+
+Collect all results into a list of vault candidates. De-duplicate. Remove any path that is itself inside another candidate (avoid listing both a vault and its parent).
+
+**Step 3 — Present discovery results**
+
+Case A — No vaults found:
+Ask: "No Obsidian vaults found. Enter your vault path (default: `~/Documents/claude-brain`):"
+If the user presses Enter or provides no input, use `~/Documents/claude-brain`.
+
+Case B — Exactly one vault found at `<path>`:
+Ask: "Found Obsidian vault at `<path>`. Use this? [Y/n]"
+- If yes (or Enter): use `<path>`.
+- If no: ask "Enter your vault path (default: `~/Documents/claude-brain`):" and use input or default.
+
+Case C — Multiple vaults found:
+Print:
+```
+Found multiple Obsidian vaults:
+  1. /path/to/vault-one
+  2. /path/to/vault-two
+  3. Enter a different path
+```
+Ask: "Which vault should Brain use? (enter number)"
+- If user picks 1 or 2 (etc.): use that path.
+- If user picks the "Enter a different path" option: ask for the path manually.
+
+**Step 4 — Save config**
+
+Expand `~` to the absolute home directory path.
+Write `~/.claude/brain.config`:
+```json
+{
+  "vault": "<absolute vault path>"
+}
+```
+Set `VAULT_ROOT` to that path.
 
 ### Gather project details
 
