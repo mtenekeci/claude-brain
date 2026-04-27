@@ -1,6 +1,6 @@
 ---
 name: brain
-description: Use when the user types /brain, /brain init, /brain load, /brain sync, /brain status, or /brain config. Manages Claude's Obsidian second brain for persistent project context across sessions.
+description: Use when the user types /brain, /brain init, /brain load, /brain sync, /brain status, /brain config, /brain remove, or /brain disconnect. Manages Claude's Obsidian second brain for persistent project context across sessions.
 ---
 
 # Brain — Obsidian Second Brain
@@ -523,4 +523,70 @@ Update the vault path.
    ```
    Vault path updated: <path>
    Config saved to ~/.claude/brain.config
+   ```
+
+---
+
+## /brain remove <slug>
+
+Permanently delete a project from the vault. Removes vault files and the project-index row. Also cleans up CLAUDE.md and the PreCompact hook in the project folder if reachable.
+
+1. Resolve vault path (see Config resolution at top).
+2. Check that `<VAULT_ROOT>/projects/<slug>/` exists. If not: "Project '`<slug>`' not found in vault."
+3. Read `<VAULT_ROOT>/projects/<slug>/context.md` — extract the `path:` frontmatter value as `PROJECT_PATH`. If `path:` is `—`, set `PROJECT_PATH` to unset.
+4. Ask for confirmation:
+   ```
+   This will permanently delete:
+     Vault:   <VAULT_ROOT>/projects/<slug>/
+     Index:   row removed from project-index.md
+   <if PROJECT_PATH set:>
+     Also:    CLAUDE.md brain section + PreCompact hook removed from <PROJECT_PATH>
+
+   Type '<slug>' to confirm:
+   ```
+   Wait for exact match. If input does not match, abort: "Cancelled."
+5. Delete `<VAULT_ROOT>/projects/<slug>/` and all contents.
+6. In `<VAULT_ROOT>/_system/project-index.md`, remove the row containing `<slug>`.
+7. If `PROJECT_PATH` is set and `<PROJECT_PATH>/CLAUDE.md` exists:
+   - Read the file. The brain section is the block from the first line up to and including the first `---` separator line.
+   - If the brain section is the entire file: delete `<PROJECT_PATH>/CLAUDE.md`.
+   - If content follows the `---` separator: remove only the brain section and the separator line, keep the rest.
+8. If `PROJECT_PATH` is set and `<PROJECT_PATH>/.claude/settings.json` exists:
+   - Read the file. Remove the PreCompact hook object whose `command` contains `BRAIN SYNC REQUIRED`.
+   - If the `PreCompact` array is now empty, remove the `PreCompact` key. If `hooks` is now empty, remove the `hooks` key.
+   - Write the cleaned JSON back.
+9. Print:
+   ```
+   Removed: <slug>
+   Vault files deleted.
+   Index row removed.
+   <if CLAUDE.md cleaned:> CLAUDE.md brain section removed from <PROJECT_PATH>
+   <if hook removed:> PreCompact hook removed from <PROJECT_PATH>/.claude/settings.json
+   ```
+
+---
+
+## /brain disconnect <slug>
+
+Stop tracking a project without deleting vault history. Removes the CLAUDE.md brain section and PreCompact hook from the project folder, leaving vault files intact.
+
+1. Resolve vault path (see Config resolution at top).
+2. Check that `<VAULT_ROOT>/projects/<slug>/context.md` exists. If not: "Project '`<slug>`' not found in vault."
+3. Read `<VAULT_ROOT>/projects/<slug>/context.md` — extract the `path:` frontmatter value as `PROJECT_PATH`.
+   If `path:` is `—` or unset: "This project has no folder path set — nothing to disconnect from. Vault files are untouched."
+4. Check that `<PROJECT_PATH>/CLAUDE.md` exists. If not: "No CLAUDE.md found at `<PROJECT_PATH>` — project may already be disconnected. Vault files are untouched."
+5. Read `<PROJECT_PATH>/CLAUDE.md`. The brain section is the block from the first line up to and including the first `---` separator line.
+   - If the brain section is the entire file: delete `<PROJECT_PATH>/CLAUDE.md`.
+   - If content follows the `---` separator: remove only the brain section and the separator line, keep the rest.
+6. If `<PROJECT_PATH>/.claude/settings.json` exists:
+   - Remove the PreCompact hook object whose `command` contains `BRAIN SYNC REQUIRED`.
+   - If the `PreCompact` array is now empty, remove the `PreCompact` key. If `hooks` is now empty, remove the `hooks` key.
+   - Write the cleaned JSON back.
+7. Print:
+   ```
+   Disconnected: <slug>
+   CLAUDE.md brain section removed from <PROJECT_PATH>
+   <if hook removed:> PreCompact hook removed.
+   Vault files untouched — history preserved at <VAULT_ROOT>/projects/<slug>/
+   To reconnect later: /brain init (choose the same slug)
    ```
