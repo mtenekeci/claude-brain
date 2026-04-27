@@ -1,0 +1,19 @@
+{
+  "name": "brain",
+  "description": "Obsidian second brain for Claude — persistent, project-isolated context across sessions with autonomous read/write",
+  "version": "1.0.0",
+  "author": {
+    "name": "Mehmet Tenekeci",
+    "email": "Mehmet.Tenekeci@imtf.com"
+  },
+  "homepage": "https://github.com/mtenekeci/claude-brain",
+  "repository": "https://github.com/mtenekeci/claude-brain",
+  "license": "MIT",
+  "keywords": [
+    "obsidian",
+    "second-brain",
+    "context",
+    "memory",
+    "knowledge-management"
+  ]
+}

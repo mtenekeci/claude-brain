@@ -16,19 +16,14 @@ Claude's Obsidian second brain — persistent, project-isolated context across s
 
 ## Install
 
-```bash
-git clone https://github.com/mtenekeci/claude-brain ~/.claude/plugins/claude-brain
+In any Claude Code session:
+
+```
+/plugin marketplace add mtenekeci/claude-brain
+/plugin install brain@mtenekeci/claude-brain
 ```
 
-Then register the plugin in `~/.claude/settings.json`:
-
-```json
-{
-  "plugins": ["~/.claude/plugins/claude-brain"]
-}
-```
-
-Restart Claude Code. The `/brain` command is now available in every session.
+The `/brain` command is now available in every session on this machine.
 
 ## Vault setup
 
