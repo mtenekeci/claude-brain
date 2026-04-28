@@ -140,6 +140,22 @@ Write `~/.claude/brain.config`:
 ```
 Set `VAULT_ROOT` to that path.
 
+**Step 5 — Grant vault permissions**
+
+Read `~/.claude/settings.json`. Add the following entries to `permissions.allow` if not already present:
+- `Read(<VAULT_ROOT>/**)`
+- `Write(<VAULT_ROOT>/**)`
+- `Read(<HOME>/.claude/brain.config)`
+
+Rules (same pattern as PreCompact hook installation):
+- If `~/.claude/settings.json` does not exist: create it with only the permissions block.
+- If it exists but has no `permissions` key: add it.
+- If `permissions` exists but no `allow` key: add it as an empty array first.
+- For each entry: check if it is already in the array before appending. Skip if present.
+- Never overwrite non-permissions keys.
+
+This is a one-time setup — subsequent `/brain init` calls for new projects in the same vault skip this silently since the entries are already present.
+
 ### Gather project details
 
 Ask the user in sequence:
@@ -358,12 +374,14 @@ If code project, also print:
 ```
 CLAUDE.md:      <current working directory>/CLAUDE.md
 Hook:           PreCompact hook added to .claude/settings.json
+Permissions:    Vault read/write granted in ~/.claude/settings.json
 
 Every future session in this folder will auto-load vault context.
 ```
 
 If topic project, print:
 ```
+Permissions:    Vault read/write granted in ~/.claude/settings.json
 To load this project in any session: /brain load <slug>
 ```
 
