@@ -59,9 +59,10 @@ claude
 Claude asks for the project name and type, then:
 - Creates `~/Documents/claude-brain/projects/my-app/`
 - Writes `CLAUDE.md` to `~/Projects/my-app/`
-- Installs the `PreCompact` hook in `.claude/settings.json`
+- Installs `PreCompact` and `SessionEnd` hooks in `.claude/settings.json`
+- Grants vault read/write permissions in `~/.claude/settings.json`
 
-Every future session in `~/Projects/my-app/` auto-loads vault context.
+Every future session in `~/Projects/my-app/` auto-loads vault context without permission prompts.
 
 ### Initialize a topic project (no code folder)
 
@@ -81,6 +82,22 @@ Run `/brain init` from any directory and choose `topic` when asked. To load cont
 
 ```
 /brain sync
+```
+
+### Remove a project from the vault
+
+Permanently deletes vault files and removes the project from the index. Also cleans up `CLAUDE.md` and hooks from the project folder if reachable. Requires typing the slug to confirm.
+
+```
+/brain remove my-app
+```
+
+### Disconnect a project without deleting history
+
+Keeps all vault history intact. Removes only the `CLAUDE.md` brain section and `SessionEnd`/`PreCompact` hooks from the project folder — stops auto-loading without losing notes.
+
+```
+/brain disconnect my-app
 ```
 
 ### Change vault location
