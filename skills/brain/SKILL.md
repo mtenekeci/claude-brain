@@ -359,6 +359,73 @@ Rules:
 - If `PreCompact` already exists: check if a hook with the same command string is present. If yes, skip. If no, append the hook object to the array.
 - Never overwrite non-hooks keys in an existing settings.json.
 
+### If code project: install SessionEnd hook
+
+The SessionEnd hook writes a minimal auto-close log marker when a session ends without a manual `/brain sync`. The next `/brain sync` replaces it with real content.
+
+**Step 1 — Install the hook script to a stable path**
+
+Write the following script to `<HOME>/.claude/brain-session-end.sh` (use the absolute home path, not `~`):
+
+```bash
+#!/bin/bash
+# Brain SessionEnd hook — writes a minimal session marker when the session
+# ends without a manual /brain sync. The next /brain sync overwrites this
+# entry with real content.
+
+set -euo pipefail
+
+VAULT=$(python3 - <<'PY'
+import json, os
+cfg = os.path.expanduser("~/.claude/brain.config")
+if os.path.exists(cfg):
+    print(json.load(open(cfg))["vault"])
+PY
+2>/dev/null) || true
+[ -z "$VAULT" ] && exit 0
+
+SLUG=$(awk -F'/' '/^vault:/{print $NF}' CLAUDE.md 2>/dev/null | tr -d '[:space:]') || true
+[ -z "$SLUG" ] && exit 0
+
+LOG="$VAULT/projects/$SLUG/log.md"
+[ -f "$LOG" ] || exit 0
+
+tail -10 "$LOG" | grep -q "(auto-close)" && exit 0
+
+N=$(grep -c "^## " "$LOG" 2>/dev/null || echo "0")
+DATE=$(date +%Y-%m-%d)
+
+printf "\n## %s · Session %d (auto-close)\nCompleted: Session ended without sync — run /brain sync to record details\nChanged: —\nDecided: none\nNext: —\n" \
+  "$DATE" "$((N+1))" >> "$LOG"
+```
+
+Then make it executable:
+```bash
+chmod +x <HOME>/.claude/brain-session-end.sh
+```
+
+If `~/.claude/brain-session-end.sh` already exists: skip (do not overwrite — the user may have customised it).
+
+**Step 2 — Add the SessionEnd hook to `.claude/settings.json`**
+
+Add to the same `<current working directory>/.claude/settings.json` used for PreCompact:
+
+```json
+"SessionEnd": [
+  {
+    "matcher": "",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "<HOME>/.claude/brain-session-end.sh"
+      }
+    ]
+  }
+]
+```
+
+Apply the same rules as PreCompact: add under `hooks` key, skip if already present.
+
 ### Confirm
 
 Print:
@@ -373,7 +440,7 @@ Log:            <VAULT_ROOT>/projects/<slug>/log.md
 If code project, also print:
 ```
 CLAUDE.md:      <current working directory>/CLAUDE.md
-Hook:           PreCompact hook added to .claude/settings.json
+Hooks:          PreCompact + SessionEnd hooks added to .claude/settings.json
 Permissions:    Vault read/write granted in ~/.claude/settings.json
 
 Every future session in this folder will auto-load vault context.
@@ -451,10 +518,14 @@ Write the result back to `VAULT_PROJECT/context.md`.
 
 Count existing `## ` entries in `log.md` to determine the current session number N.
 
-Append to `VAULT_PROJECT/log.md`:
+Check if the last entry is an `(auto-close)` entry (written by the SessionEnd hook):
+- If yes: replace that entry in-place with the proper sync content below. N stays the same — the auto-close entry already counted this session.
+- If no: append a new entry. Use N+1 as the session number.
+
+Entry format:
 ```markdown
 
-## <YYYY-MM-DD> · Session <N+1>
+## <YYYY-MM-DD> · Session <N or N+1>
 Completed: <what was accomplished this session>
 Changed: <files or systems touched, or "—" if none>
 Decided: <decisions made with one-line reason, or "none">

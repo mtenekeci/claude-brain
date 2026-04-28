@@ -12,6 +12,11 @@ vault: {vault-root}/projects/{slug}
 - After completing a significant task: update `context.md` state + append `log.md` entry
 - After making an architectural decision: update `context.md` decisions section
 - Before `/compact`: write session summary to `log.md`, compress `context.md` if >150 lines
+- When the user signals they are done ("thanks", "done", "good", "bye", "ship it", "looks good", "that's all", "close this"): write log entry immediately without being asked, then confirm it is saved
+- If meaningful work was done and no sync has happened: proactively offer to sync at a natural pause
+
+## Sync is part of the job
+Writing to the vault is not a separate chore — it is the last step of every meaningful task. Do not wait to be asked. A session that ends without a log entry is incomplete.
 
 ## context.md rules
 - Hard cap: 150 lines. Compress, never delete.
