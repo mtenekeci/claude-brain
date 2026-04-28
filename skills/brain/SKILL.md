@@ -331,33 +331,67 @@ If the derived slug already appears in the table as a row value, stop and say:
 
 ### If code project: install PreCompact hook
 
-Target: `<current working directory>/.claude/settings.json`
+The PreCompact hook writes a `(pre-compact)` checkpoint entry to `log.md` via bash before the compact, then tells Claude to fill it in. This guarantees the session is recorded even if Claude doesn't act on the reminder.
 
-The hook block to install:
-```json
-{
-  "hooks": {
-    "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo 'BRAIN SYNC REQUIRED: Before compacting, write session summary to log.md and update context.md. This is mandatory.'"
-          }
-        ]
-      }
-    ]
-  }
-}
+**Step 1 — Install the hook script to a stable path**
+
+Write the following script to `<HOME>/.claude/brain-precompact.sh`:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+VAULT=$(python3 - <<'PY'
+import json, os
+cfg = os.path.expanduser("~/.claude/brain.config")
+if os.path.exists(cfg):
+    print(json.load(open(cfg))["vault"])
+PY
+2>/dev/null) || true
+
+SLUG=$(awk -F'/' '/^vault:/{print $NF}' CLAUDE.md 2>/dev/null | tr -d '[:space:]') || true
+
+if [ -z "$VAULT" ] || [ -z "$SLUG" ]; then
+  echo "BRAIN SYNC REQUIRED: Write session summary to log.md and update context.md before compacting."
+  exit 0
+fi
+
+LOG="$VAULT/projects/$SLUG/log.md"
+if [ ! -f "$LOG" ]; then
+  echo "BRAIN SYNC REQUIRED: Write session summary to log.md and update context.md before compacting."
+  exit 0
+fi
+
+if tail -10 "$LOG" | grep -q "(pre-compact\|auto-close)"; then
+  echo "BRAIN SYNC: A checkpoint entry already exists in log.md. UPDATE IT NOW — replace all NEEDS_UPDATE placeholders with real session details, then update context.md."
+  exit 0
+fi
+
+N=$(grep -c "^## " "$LOG" 2>/dev/null || echo "0")
+DATE=$(date +%Y-%m-%d)
+
+printf "\n## %s · Session %d (pre-compact)\nCompleted: NEEDS_UPDATE\nChanged: NEEDS_UPDATE\nDecided: NEEDS_UPDATE\nNext: NEEDS_UPDATE\n" \
+  "$DATE" "$((N+1))" >> "$LOG"
+
+echo "BRAIN SYNC: Checkpoint written to $LOG as Session $((N+1)). FILL IT IN NOW — replace every NEEDS_UPDATE with real session details. Then update context.md State and Active Work sections. Do this before the compact proceeds."
 ```
 
+Then make it executable: `chmod +x <HOME>/.claude/brain-precompact.sh`
+
+If `~/.claude/brain-precompact.sh` already exists: skip (do not overwrite).
+
+**Step 2 — Add the PreCompact hook to `.claude/settings.json`**
+
+Target: `<current working directory>/.claude/settings.json`
+
+Hook command: `<HOME>/.claude/brain-precompact.sh`
+
 Rules:
-- If `.claude/settings.json` does not exist: create `.claude/` directory if needed, write the block above as the full file.
-- If `.claude/settings.json` exists but has no `hooks` key: add the `hooks` object to the existing JSON.
-- If `.claude/settings.json` exists with `hooks` but no `PreCompact` key: add the `PreCompact` array.
-- If `PreCompact` already exists: check if a hook with the same command string is present. If yes, skip. If no, append the hook object to the array.
-- Never overwrite non-hooks keys in an existing settings.json.
+- If `.claude/settings.json` does not exist: create `.claude/` directory if needed, write the full hooks block.
+- If it exists but has no `hooks` key: add it.
+- If `hooks` exists but no `PreCompact` key: add it.
+- If `PreCompact` already exists: check if a hook with this command is present. If yes, skip. If no, append.
+- Never overwrite non-hooks keys.
 
 ### If code project: install SessionEnd hook
 
@@ -518,8 +552,8 @@ Write the result back to `VAULT_PROJECT/context.md`.
 
 Count existing `## ` entries in `log.md` to determine the current session number N.
 
-Check if the last entry is an `(auto-close)` entry (written by the SessionEnd hook):
-- If yes: replace that entry in-place with the proper sync content below. N stays the same — the auto-close entry already counted this session.
+Check if the last entry is a placeholder written by a hook — `(pre-compact)` or `(auto-close)`:
+- If yes: replace that entry in-place with the proper sync content below. N stays the same — the placeholder already counted this session.
 - If no: append a new entry. Use N+1 as the session number.
 
 Entry format:
