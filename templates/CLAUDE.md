@@ -2,11 +2,17 @@
 
 vault: {vault-root}/projects/{slug}
 
-## Session start protocol
+## Context protocol
+On session start:
 1. Read `context.md` in full
 2. Read last entry of `log.md` only
-3. If about to make an architectural decision → read last 5 `log.md` entries (Tier 2)
-4. Read full `log.md` only when tracing history of a specific problem (Tier 3)
+
+During the session — load more when needed, not upfront:
+3. Before any architectural decision or significant design choice → read last 5 `log.md` entries (Tier 2)
+4. When asked about history, past decisions, or "what did we do about X" → read full `log.md` (Tier 3)
+5. When context.md feels incomplete for the current task → re-read it
+
+Never answer from memory when the vault has the authoritative record.
 
 ## Write protocol
 - After completing a significant task: update `context.md` state + append `log.md` entry
