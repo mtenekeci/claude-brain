@@ -50,11 +50,13 @@ Always use Obsidian wikilinks when referencing other vault files. This builds th
 
 **Never use plain text** where a wikilink could go. Every connection you write becomes an edge in the Obsidian graph.
 
-**Contextual wikilinks (apply during init seeding and sync only):**
-When writing or updating vault content during `/brain init` Step G or `/brain sync`, scan prose sections (State, Active Work, Decisions, Open Questions) for plain mentions of any slug in `KNOWN_SLUGS`.
+**Contextual wikilinks (apply on every vault write):**
+Whenever writing or updating any prose section in a vault file — during `/brain init` Step G, `/brain sync`, or any mid-session write protocol update — scan for plain mentions of known project slugs and replace with wikilinks.
 
-- `/brain init`: `KNOWN_SLUGS` comes from `project-index.md` read during the "Check for duplicate slug" step — no extra read needed.
-- `/brain sync`: `KNOWN_SLUGS` comes from the explicit "Load known slugs" step at the start of sync.
+`KNOWN_SLUGS` source by context:
+- `/brain init`: from `project-index.md` read during "Check for duplicate slug" — no extra read needed.
+- `/brain sync`: from the explicit "Load known slugs" step at the start of sync.
+- Mid-session write (e.g. Architecture update after code exploration): read `<VAULT_ROOT>/_system/project-index.md` to get current slugs before writing. One read, cached for the rest of the session.
 
 For each slug found as a standalone word (not already inside `[[...]]`, not inside code blocks or frontmatter): replace with `[[projects/<slug>/context\|<slug>]]`.
 
