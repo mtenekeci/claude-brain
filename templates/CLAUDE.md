@@ -17,7 +17,7 @@ Never answer from memory when the vault has the authoritative record.
 ## Write protocol
 - After completing a significant task: update `context.md` state + append `log.md` entry
 - After making an architectural decision: update `context.md` decisions section
-- After significant code exploration (reading many files to understand structure, patterns, or conventions): update the `context.md` Architecture section with what was learned — so future sessions don't re-read the same files
+- After any session where ≥ 3 source files were read: before writing the log entry, ask "what would a future session need to know to avoid re-reading these files?" Add the answer to the `context.md` Architecture section. This applies especially to bug-fix sessions — diagnosing a bug requires the most code reading and produces the most reusable knowledge
 - Before `/compact`: write session summary to `log.md`, compress `context.md` if >150 lines
 - When the user signals they are done ("thanks", "done", "good", "bye", "ship it", "looks good", "that's all", "close this"): write log entry immediately without being asked, then confirm it is saved
 - If meaningful work was done and no sync has happened: proactively offer to sync at a natural pause
