@@ -1,7 +1,7 @@
 {
   "name": "brain",
   "description": "Obsidian second brain for Claude — persistent, project-isolated context across sessions with autonomous read/write",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": {
     "name": "Mehmet Tenekeci",
     "email": "mehmet@tenekeci.ch"
