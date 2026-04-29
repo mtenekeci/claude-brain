@@ -20,7 +20,7 @@ In any Claude Code session:
 
 ```
 /plugin marketplace add mtenekeci/claude-brain
-/plugin install brain@mtenekeci/claude-brain
+/plugin install brain@claude-brain
 ```
 
 The `/brain` command is now available in every session on this machine.
