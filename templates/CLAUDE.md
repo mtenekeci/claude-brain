@@ -12,6 +12,9 @@ During the session — load more when needed, not upfront:
 4. When asked about history, past decisions, or "what did we do about X" → read full `log.md` (Tier 3)
 5. When context.md feels incomplete for the current task → re-read it
 
+**Vault before code — always:**
+Before opening any source file to understand how something works, check the `context.md` Architecture section first. Only open the file if the vault doesn't have the answer. If you had to open the file because the vault was missing it — that is a vault gap: update Architecture after reading so the next session doesn't pay the same cost.
+
 Never answer from memory when the vault has the authoritative record.
 
 ## Write protocol
