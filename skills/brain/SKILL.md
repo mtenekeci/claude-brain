@@ -244,6 +244,39 @@ If the derived slug already appears in the table as a row value, stop and say:
    ```
    If it exists, extract any documented decisions, constraints, or context already written there. This is the highest-signal source — treat it as ground truth.
 
+   **Step E2 — Optional deep architecture scan (existing projects only)**
+
+   Ask: "Run deep architecture scan? Reads up to 10 key source files to seed the Architecture section with real patterns and conventions. Recommended for existing projects. [Y/n]"
+
+   If no: skip to Step F.
+
+   If yes:
+
+   1. Find entry points — the files most likely to reveal overall structure:
+   ```bash
+   find . -maxdepth 4 \( -name "index.ts" -o -name "index.tsx" -o -name "main.ts" -o -name "main.tsx" -o -name "app.ts" -o -name "app.tsx" -o -name "server.ts" -o -name "index.js" -o -name "main.py" -o -name "app.py" -o -name "main.go" \) \
+     ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" \
+     2>/dev/null | head -5
+   ```
+
+   2. Find recently touched source files — highest signal for active patterns:
+   ```bash
+   git log --name-only --format="" -30 2>/dev/null \
+     | grep -E "\.(ts|tsx|js|jsx|py|go|rs|rb|java|kt|swift)$" \
+     | grep -v -E "(node_modules|\.test\.|\.spec\.|dist/|build/)" \
+     | sort -u | head -8
+   ```
+
+   3. Combine both lists, deduplicate, cap at 10 files total. Read each file.
+
+   4. From all files read, extract into `DEEP_SCAN_NOTES`:
+      - Key abstractions and their responsibilities (not just names — what they do and why)
+      - Patterns used consistently across the codebase (naming, data flow, error handling)
+      - Non-obvious conventions a new session would need to know (e.g. "all DB calls go through X wrapper", "auth is enforced in Y not Z")
+      - Anything that would prevent a wrong assumption
+
+   Store `DEEP_SCAN_NOTES` for use in Step G. Skip to Step F.
+
    **Step F — Read Claude's memory for this project**
 
    Compute the memory path: take the absolute current working directory, remove the leading `/`, replace all remaining `/` with `-`.
@@ -281,10 +314,8 @@ If the derived slug already appears in the table as a row value, stop and say:
    what the project is, what is working, what stage it is at>
 
    ## Architecture
-   <bullets from file structure + manifest:
-   - key directories and what they contain
-   - tech stack and runtime
-   - notable dependencies>
+   <bullets from file structure + manifest: key directories, tech stack, runtime, notable dependencies.
+   If DEEP_SCAN_NOTES exist: add bullets for each pattern, abstraction, and convention found — not just directory names. These are the facts that prevent a future session from re-reading the same files.>
 
    ## Active Work
    <from last 5-10 git commits or CLAUDE.md active work:
