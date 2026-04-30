@@ -437,6 +437,90 @@ Rules:
 - If `PreCompact` already exists: check if a hook with this command is present. If yes, skip. If no, append.
 - Never overwrite non-hooks keys.
 
+### If code project: install PostToolUse hook
+
+The PostToolUse hook counts source file reads per session and reminds Claude to update vault Architecture after every 3 source files — fires at exactly the right moment, mid-session, when knowledge is fresh.
+
+Write the following script to `<HOME>/.claude/brain-post-tool-use.sh`:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+INPUT=$(cat)
+
+TOOL_NAME=$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    print(d.get('tool_name', ''))
+except:
+    pass
+" "$INPUT" 2>/dev/null) || true
+
+[ "$TOOL_NAME" = "Read" ] || exit 0
+
+FILE_PATH=$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    print(d.get('tool_input', {}).get('file_path', ''))
+except:
+    pass
+" "$INPUT" 2>/dev/null) || true
+[ -z "$FILE_PATH" ] && exit 0
+
+EXT="${FILE_PATH##*.}"
+case "$EXT" in
+  ts|tsx|js|jsx|py|go|rs|rb|java|kt|swift|vue|svelte|c|cpp|cs|php|scala) ;;
+  *) exit 0 ;;
+esac
+
+VAULT=$(python3 -c "
+import json, os
+cfg = os.path.expanduser('~/.claude/brain.config')
+if os.path.exists(cfg):
+    print(json.load(open(cfg))['vault'])
+" 2>/dev/null) || true
+[ -n "$VAULT" ] && [[ "$FILE_PATH" == "$VAULT"* ]] && exit 0
+
+PROJECT_HASH=$(printf '%s' "$PWD" | md5 -q 2>/dev/null || printf '%s' "$PWD" | md5sum | cut -c1-8)
+COUNTER_FILE="/tmp/brain-reads-${PROJECT_HASH}-$(date +%Y%m%d)"
+COUNT=0
+[ -f "$COUNTER_FILE" ] && COUNT=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
+COUNT=$((COUNT + 1))
+echo "$COUNT" > "$COUNTER_FILE"
+
+if [ $((COUNT % 3)) -eq 0 ] && [ "$COUNT" -le 9 ]; then
+  SLUG=$(awk -F'/' '/^vault:/{print $NF}' CLAUDE.md 2>/dev/null | tr -d '[:space:]') || true
+  CONTEXT_PATH=""
+  [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH=" ($VAULT/projects/$SLUG/context.md)"
+  echo "Brain: $COUNT source files read this session. Before continuing, update the Architecture section in context.md${CONTEXT_PATH} with what you've learned — so future sessions don't re-read these files."
+fi
+```
+
+Make it executable: `chmod +x <HOME>/.claude/brain-post-tool-use.sh`
+
+If `~/.claude/brain-post-tool-use.sh` already exists: skip (do not overwrite).
+
+Add to `<current working directory>/.claude/settings.json`:
+
+```json
+"PostToolUse": [
+  {
+    "matcher": "",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "<HOME>/.claude/brain-post-tool-use.sh"
+      }
+    ]
+  }
+]
+```
+
+Apply same rules as other hooks: add under `hooks` key, skip if already present.
+
 ### If code project: install SessionStart hook
 
 The SessionStart hook fires before Claude sees the first user message. Its stdout is injected into Claude's context, ensuring the vault is read at session start — not left as an advisory instruction Claude may skip.
@@ -582,7 +666,7 @@ Log:            <VAULT_ROOT>/projects/<slug>/log.md
 If code project, also print:
 ```
 CLAUDE.md:      <current working directory>/CLAUDE.md
-Hooks:          SessionStart + PreCompact + SessionEnd hooks added to .claude/settings.json
+Hooks:          PostToolUse + SessionStart + PreCompact + SessionEnd hooks added to .claude/settings.json
 Permissions:    Vault read/write granted in ~/.claude/settings.json
 
 Every future session in this folder will auto-load vault context.
