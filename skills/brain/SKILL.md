@@ -437,9 +437,64 @@ Rules:
 - If `PreCompact` already exists: check if a hook with this command is present. If yes, skip. If no, append.
 - Never overwrite non-hooks keys.
 
+### If code project: install SessionStart hook
+
+The SessionStart hook fires before Claude sees the first user message. Its stdout is injected into Claude's context, ensuring the vault is read at session start — not left as an advisory instruction Claude may skip.
+
+Write the following script to `<HOME>/.claude/brain-session-start.sh`:
+
+```bash
+#!/bin/bash
+# Brain SessionStart hook — injects vault file paths into Claude's context
+# before the first user prompt. Claude reads these files before responding.
+
+VAULT=$(python3 - <<'PY'
+import json, os
+cfg = os.path.expanduser("~/.claude/brain.config")
+if os.path.exists(cfg):
+    print(json.load(open(cfg))["vault"])
+PY
+2>/dev/null) || true
+[ -z "$VAULT" ] && exit 0
+
+SLUG=$(awk -F'/' '/^vault:/{print $NF}' CLAUDE.md 2>/dev/null | tr -d '[:space:]') || true
+[ -z "$SLUG" ] && exit 0
+
+CONTEXT="$VAULT/projects/$SLUG/context.md"
+LOG="$VAULT/projects/$SLUG/log.md"
+
+[ -f "$CONTEXT" ] || exit 0
+
+echo "Brain: read these files now before responding to any message:
+1. $CONTEXT (full)
+2. $LOG — find the last ## heading and read to end of file only"
+```
+
+Make it executable: `chmod +x <HOME>/.claude/brain-session-start.sh`
+
+If `~/.claude/brain-session-start.sh` already exists: skip (do not overwrite).
+
+Add to `<current working directory>/.claude/settings.json`:
+
+```json
+"SessionStart": [
+  {
+    "matcher": "",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "<HOME>/.claude/brain-session-start.sh"
+      }
+    ]
+  }
+]
+```
+
+Apply same rules as other hooks: add under `hooks` key, skip if already present.
+
 ### If code project: install SessionEnd hook
 
-The SessionEnd hook writes a minimal auto-close log marker when a session ends without a manual `/brain sync`. The next `/brain sync` replaces it with real content.
+The SessionEnd hook writes a git-enriched auto-close log marker when a session ends without a manual `/brain sync`. The next `/brain sync` replaces it with real content.
 
 **Step 1 — Install the hook script to a stable path**
 
@@ -527,7 +582,7 @@ Log:            <VAULT_ROOT>/projects/<slug>/log.md
 If code project, also print:
 ```
 CLAUDE.md:      <current working directory>/CLAUDE.md
-Hooks:          PreCompact + SessionEnd hooks added to .claude/settings.json
+Hooks:          SessionStart + PreCompact + SessionEnd hooks added to .claude/settings.json
 Permissions:    Vault read/write granted in ~/.claude/settings.json
 
 Every future session in this folder will auto-load vault context.
