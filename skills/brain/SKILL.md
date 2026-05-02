@@ -190,18 +190,17 @@ A reusable sub-procedure. Run this whenever CLAUDE.md is read to identify the cu
 
 ### Step 1 — Ensure all 4 hook scripts are installed
 
-For each of the 4 hook scripts, always overwrite with the current version (these are plugin-managed files, not user-customised):
+Run the following bash commands to copy and make executable (do not embed script content inline — always copy from the plugin hooks directory):
 
+```bash
+cp ~/.claude/plugins/claude-brain/hooks/session-start.sh ~/.claude/brain-session-start.sh
+cp ~/.claude/plugins/claude-brain/hooks/precompact.sh ~/.claude/brain-precompact.sh
+cp ~/.claude/plugins/claude-brain/hooks/session-end.sh ~/.claude/brain-session-end.sh
+cp ~/.claude/plugins/claude-brain/hooks/post-tool-use.sh ~/.claude/brain-post-tool-use.sh
+chmod +x ~/.claude/brain-session-start.sh ~/.claude/brain-precompact.sh ~/.claude/brain-session-end.sh ~/.claude/brain-post-tool-use.sh
 ```
-~/.claude/brain-session-start.sh    ← from SKILL.md SessionStart hook section
-~/.claude/brain-precompact.sh       ← from SKILL.md PreCompact hook section
-~/.claude/brain-session-end.sh      ← from SKILL.md SessionEnd hook section
-~/.claude/brain-post-tool-use.sh    ← from SKILL.md PostToolUse hook section
-```
 
-Run `chmod +x` on each after writing.
-
-If the PLUGIN_DIR scripts are accessible at `~/.claude/plugins/claude-brain/hooks/`, copy from there. Otherwise use the inline script content from the respective `/brain init` hook sections.
+If `~/.claude/plugins/claude-brain/hooks/` does not exist, skip this step silently — hooks are managed externally.
 
 ### Step 2 — Ensure vault permissions are complete in `~/.claude/settings.json`
 
@@ -212,6 +211,16 @@ Read `~/.claude/settings.json`. Check that all required entries are present in `
 - `Read(<HOME>/.claude/brain.config)`
 - `Read(<HOME>/.claude/settings.json)`
 - `Edit(<HOME>/.claude/settings.json)`
+- `Bash(cat ~/.claude/brain.config*)`
+- `Bash(ls <VAULT_ROOT>/**)`
+- `Bash(find <VAULT_ROOT>/**)`
+- `Bash(mkdir -p <VAULT_ROOT>/**)`
+- `Bash(cp ~/.claude/plugins/claude-brain/hooks/**)`
+- `Bash(chmod +x ~/.claude/brain-*)`
+- `Bash(mkdir -p <PROJECT_PATH>/.claude)`
+- `Bash(cat <PROJECT_PATH>/.claude/settings.json*)`
+- `Write(<PROJECT_PATH>/.claude/settings.json)`
+- `Edit(<PROJECT_PATH>/.claude/settings.json)`
 
 Add any that are missing. This silently repairs projects initialized before these permissions were required.
 
@@ -327,6 +336,16 @@ Read `~/.claude/settings.json`. Add the following entries to `permissions.allow`
 - `Read(<HOME>/.claude/brain.config)`
 - `Read(<HOME>/.claude/settings.json)`
 - `Edit(<HOME>/.claude/settings.json)`
+- `Bash(cat ~/.claude/brain.config*)`
+- `Bash(ls <VAULT_ROOT>/**)`
+- `Bash(find <VAULT_ROOT>/**)`
+- `Bash(mkdir -p <VAULT_ROOT>/**)`
+- `Bash(cp ~/.claude/plugins/claude-brain/hooks/**)`
+- `Bash(chmod +x ~/.claude/brain-*)`
+- `Bash(mkdir -p <PROJECT_PATH>/.claude)`
+- `Bash(cat <PROJECT_PATH>/.claude/settings.json*)`
+- `Write(<PROJECT_PATH>/.claude/settings.json)`
+- `Edit(<PROJECT_PATH>/.claude/settings.json)`
 
 Rules (same pattern as PreCompact hook installation):
 - If `~/.claude/settings.json` does not exist: create it with only the permissions block.
@@ -584,61 +603,12 @@ The PreCompact hook writes a `(pre-compact)` checkpoint entry to `log.md` via ba
 
 **Step 1 — Install the hook script to a stable path**
 
-Write the following script to `<HOME>/.claude/brain-precompact.sh`:
+Run:
 
 ```bash
-#!/bin/bash
-# Brain PreCompact hook — writes a git-enriched checkpoint entry, then tells
-# Claude to fill in Completed and Decided with session knowledge.
-# Degrades gracefully if Claude doesn't act — git context is still useful.
-
-set -euo pipefail
-
-VAULT=$(python3 - <<'PY'
-import json, os
-cfg = os.path.expanduser("~/.claude/brain.config")
-if os.path.exists(cfg):
-    print(json.load(open(cfg))["vault"])
-PY
-2>/dev/null) || true
-
-SLUG=$(awk -F'/' '/^vault:/{print $NF}' CLAUDE.md 2>/dev/null | tr -d '[:space:]') || true
-
-if [ -z "$VAULT" ] || [ -z "$SLUG" ]; then
-  echo "BRAIN SYNC: Update log.md and context.md before compacting."
-  exit 0
-fi
-
-LOG="$VAULT/projects/$SLUG/log.md"
-if [ ! -f "$LOG" ]; then
-  echo "BRAIN SYNC: Update log.md and context.md before compacting."
-  exit 0
-fi
-
-if tail -10 "$LOG" | grep -q "(pre-compact\|auto-close)"; then
-  echo "BRAIN SYNC: Checkpoint already in log.md — update Completed and Decided fields with real session details, then update context.md."
-  exit 0
-fi
-
-TODAY=$(date +%Y-%m-%d)
-COMMITTED=$(git log --since="$TODAY 00:00" --name-only --format="" 2>/dev/null \
-  | grep -v "^$" | sort -u | head -8) || true
-MODIFIED=$(git status --short 2>/dev/null | awk '{print $2}' | head -5) || true
-CHANGED=$(printf "%s\n%s" "$COMMITTED" "$MODIFIED" \
-  | grep -v "^$" | sort -u | tr '\n' ' ' | sed 's/ $//' | head -c 200) || true
-[ -z "$CHANGED" ] && CHANGED="—"
-
-N=$(grep -c "^## " "$LOG" 2>/dev/null || echo "0")
-
-printf "\n## %s · Session %d (pre-compact)\nCompleted: —\nChanged: %s\nDecided: none\nNext: —\n" \
-  "$TODAY" "$((N+1))" "$CHANGED" >> "$LOG"
-
-echo "BRAIN SYNC: Checkpoint written to log.md (Session $((N+1))) with git context. NOW update: (1) Completed — what was accomplished, (2) Decided — any decisions made, (3) context.md State and Active Work. Do this before the compact proceeds."
+cp ~/.claude/plugins/claude-brain/hooks/precompact.sh ~/.claude/brain-precompact.sh
+chmod +x ~/.claude/brain-precompact.sh
 ```
-
-Then make it executable: `chmod +x <HOME>/.claude/brain-precompact.sh`
-
-Always overwrite `~/.claude/brain-precompact.sh` — this is a plugin-managed file.
 
 **Step 2 — Add the PreCompact hook to `.claude/settings.json`**
 
@@ -657,67 +627,12 @@ Rules:
 
 The PostToolUse hook counts source file reads per session and reminds Claude to update vault Architecture after every 3 source files — fires at exactly the right moment, mid-session, when knowledge is fresh.
 
-Write the following script to `<HOME>/.claude/brain-post-tool-use.sh`:
+Run:
 
 ```bash
-#!/bin/bash
-set -euo pipefail
-
-INPUT=$(cat)
-
-TOOL_NAME=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    print(d.get('tool_name', ''))
-except:
-    pass
-" "$INPUT" 2>/dev/null) || true
-
-[ "$TOOL_NAME" = "Read" ] || exit 0
-
-FILE_PATH=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    print(d.get('tool_input', {}).get('file_path', ''))
-except:
-    pass
-" "$INPUT" 2>/dev/null) || true
-[ -z "$FILE_PATH" ] && exit 0
-
-EXT="${FILE_PATH##*.}"
-case "$EXT" in
-  ts|tsx|js|jsx|py|go|rs|rb|java|kt|swift|vue|svelte|c|cpp|cs|php|scala) ;;
-  *) exit 0 ;;
-esac
-
-VAULT=$(python3 -c "
-import json, os
-cfg = os.path.expanduser('~/.claude/brain.config')
-if os.path.exists(cfg):
-    print(json.load(open(cfg))['vault'])
-" 2>/dev/null) || true
-[ -n "$VAULT" ] && [[ "$FILE_PATH" == "$VAULT"* ]] && exit 0
-
-PROJECT_HASH=$(printf '%s' "$PWD" | md5 -q 2>/dev/null || printf '%s' "$PWD" | md5sum | cut -c1-8)
-COUNTER_FILE="/tmp/brain-reads-${PROJECT_HASH}-$(date +%Y%m%d)"
-COUNT=0
-[ -f "$COUNTER_FILE" ] && COUNT=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
-COUNT=$((COUNT + 1))
-echo "$COUNT" > "$COUNTER_FILE"
-
-if [ $((COUNT % 3)) -eq 0 ] && [ "$COUNT" -le 9 ]; then
-  SLUG=$(awk -F'/' '/^vault:/{print $NF}' CLAUDE.md 2>/dev/null | tr -d '[:space:]') || true
-  CONTEXT_PATH=""
-  [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH=" ($VAULT/projects/$SLUG/context.md)"
-  echo "Brain: $COUNT source files read this session. Before continuing, update the Architecture section in context.md${CONTEXT_PATH} with what you've learned — so future sessions don't re-read these files."
-fi
+cp ~/.claude/plugins/claude-brain/hooks/post-tool-use.sh ~/.claude/brain-post-tool-use.sh
+chmod +x ~/.claude/brain-post-tool-use.sh
 ```
-
-Make it executable: `chmod +x <HOME>/.claude/brain-post-tool-use.sh`
-
-Always overwrite `~/.claude/brain-post-tool-use.sh` — this is a plugin-managed file.
 
 Add to `<current working directory>/.claude/settings.json`:
 
@@ -741,38 +656,12 @@ Apply same rules as other hooks: add under `hooks` key, skip if already present.
 
 The SessionStart hook fires before Claude sees the first user message. Its stdout is injected into Claude's context, ensuring the vault is read at session start — not left as an advisory instruction Claude may skip.
 
-Write the following script to `<HOME>/.claude/brain-session-start.sh`:
+Run:
 
 ```bash
-#!/bin/bash
-# Brain SessionStart hook — injects vault file paths into Claude's context
-# before the first user prompt. Claude reads these files before responding.
-
-VAULT=$(python3 - <<'PY'
-import json, os
-cfg = os.path.expanduser("~/.claude/brain.config")
-if os.path.exists(cfg):
-    print(json.load(open(cfg))["vault"])
-PY
-2>/dev/null) || true
-[ -z "$VAULT" ] && exit 0
-
-SLUG=$(awk -F'/' '/^vault:/{print $NF}' CLAUDE.md 2>/dev/null | tr -d '[:space:]') || true
-[ -z "$SLUG" ] && exit 0
-
-CONTEXT="$VAULT/projects/$SLUG/context.md"
-LOG="$VAULT/projects/$SLUG/log.md"
-
-[ -f "$CONTEXT" ] || exit 0
-
-echo "Brain: read these files now before responding to any message:
-1. $CONTEXT (full)
-2. $LOG — find the last ## heading and read to end of file only"
+cp ~/.claude/plugins/claude-brain/hooks/session-start.sh ~/.claude/brain-session-start.sh
+chmod +x ~/.claude/brain-session-start.sh
 ```
-
-Make it executable: `chmod +x <HOME>/.claude/brain-session-start.sh`
-
-Always overwrite `~/.claude/brain-session-start.sh` — this is a plugin-managed file.
 
 Add to `<current working directory>/.claude/settings.json`:
 
@@ -798,55 +687,12 @@ The SessionEnd hook writes a git-enriched auto-close log marker when a session e
 
 **Step 1 — Install the hook script to a stable path**
 
-Write the following script to `<HOME>/.claude/brain-session-end.sh` (use the absolute home path, not `~`):
+Run:
 
 ```bash
-#!/bin/bash
-# Brain SessionEnd hook — writes a session marker enriched with git context
-# when the session ends without a manual /brain sync.
-# The next /brain sync overwrites this entry with real content.
-
-set -euo pipefail
-
-VAULT=$(python3 - <<'PY'
-import json, os
-cfg = os.path.expanduser("~/.claude/brain.config")
-if os.path.exists(cfg):
-    print(json.load(open(cfg))["vault"])
-PY
-2>/dev/null) || true
-[ -z "$VAULT" ] && exit 0
-
-SLUG=$(awk -F'/' '/^vault:/{print $NF}' CLAUDE.md 2>/dev/null | tr -d '[:space:]') || true
-[ -z "$SLUG" ] && exit 0
-
-LOG="$VAULT/projects/$SLUG/log.md"
-[ -f "$LOG" ] || exit 0
-
-tail -10 "$LOG" | grep -q "(auto-close)" && exit 0
-
-# Collect changed files: committed today + currently modified
-TODAY=$(date +%Y-%m-%d)
-COMMITTED=$(git log --since="$TODAY 00:00" --name-only --format="" 2>/dev/null \
-  | grep -v "^$" | sort -u | head -8) || true
-MODIFIED=$(git status --short 2>/dev/null | awk '{print $2}' | head -5) || true
-CHANGED=$(printf "%s\n%s" "$COMMITTED" "$MODIFIED" \
-  | grep -v "^$" | sort -u | tr '\n' ' ' | sed 's/ $//' | head -c 200) || true
-[ -z "$CHANGED" ] && CHANGED="—"
-
-N=$(grep -c "^## " "$LOG" 2>/dev/null || echo "0")
-DATE=$TODAY
-
-printf "\n## %s · Session %d (auto-close)\nCompleted: Session ended without sync — run /brain sync to record details\nChanged: %s\nDecided: none\nNext: —\n" \
-  "$DATE" "$((N+1))" "$CHANGED" >> "$LOG"
+cp ~/.claude/plugins/claude-brain/hooks/session-end.sh ~/.claude/brain-session-end.sh
+chmod +x ~/.claude/brain-session-end.sh
 ```
-
-Then make it executable:
-```bash
-chmod +x <HOME>/.claude/brain-session-end.sh
-```
-
-Always overwrite `~/.claude/brain-session-end.sh` — this is a plugin-managed file.
 
 **Step 2 — Add the SessionEnd hook to `.claude/settings.json`**
 
