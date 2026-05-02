@@ -18,12 +18,23 @@ Before opening any source file to understand how something works, check the `con
 Never answer from memory when the vault has the authoritative record.
 
 ## Write protocol
-- After completing a significant task: update `context.md` state + append `log.md` entry
-- After making an architectural decision: update `context.md` decisions section
-- After any session where ≥ 3 source files were read: before writing the log entry, ask "what would a future session need to know to avoid re-reading these files?" Add the answer to the `context.md` Architecture section. This applies especially to bug-fix sessions — diagnosing a bug requires the most code reading and produces the most reusable knowledge
-- Before `/compact`: write session summary to `log.md`, compress `context.md` if >150 lines
-- When the user signals they are done ("thanks", "done", "good", "bye", "ship it", "looks good", "that's all", "close this"): write log entry immediately without being asked, then confirm it is saved
-- If meaningful work was done and no sync has happened: proactively offer to sync at a natural pause
+
+**Write triggers — act on these without being asked:**
+
+| When | Write |
+|---|---|
+| You read a source file and learned something non-obvious | One Architecture bullet, before your next tool call |
+| A decision was made | Add to Decisions immediately |
+| An open question resolved | Remove from Open Questions immediately |
+| 15+ tool calls since last vault write | Pause — check if Architecture, Decisions, or Open Questions need updating |
+| Discrete task completed (bug fix, feature, investigation) | Update State + Active Work + append log entry, before final response |
+| User signals done ("thanks", "done", "good", "bye", "ship it", "looks good") | Write log entry immediately, confirm saved |
+
+**Minimal write** (small task, single file): one Architecture bullet if something non-obvious was discovered. No log entry needed.
+
+**Full write** (multiple files read, decision made, bug fixed, meaningful work): update State + Active Work + all changed sections, append log entry.
+
+Before `/compact`: write session summary to `log.md`, compress `context.md` if >150 lines.
 
 ## Sync is part of the job
 Writing to the vault is not a separate chore — it is the last step of every meaningful task. Do not wait to be asked. A session that ends without a log entry is incomplete.

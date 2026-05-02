@@ -64,6 +64,49 @@ This runs only on writes, never on session-start reads — zero token cost at lo
 
 ---
 
+## Autonomous write protocol
+
+These rules apply at all times — not just when `/brain` commands are invoked. They govern when Claude writes to the vault without being explicitly asked.
+
+### When to write
+
+| Trigger | What to write |
+|---|---|
+| You read a source file and discovered a non-obvious fact (a pattern, convention, or structure) | One bullet added to `context.md ## Architecture` before your next tool call. The Architecture section is a cache — every fact you write here prevents a future session from re-reading that file. |
+| A decision was made or confirmed | Add to `context.md ## Decisions` immediately. Do not wait for sync. |
+| An open question was resolved | Remove it from `context.md ## Open Questions` immediately. |
+| You've made 15+ tool calls without a vault write | Pause. Ask: "Did I learn anything that belongs in Architecture, Decisions, or Open Questions?" If yes, write it now before continuing. |
+| A discrete task completed (bug fix, feature, investigation, refactor) | Before writing your final response: update `## State` + `## Active Work`, append a `log.md` entry. |
+| The user signals they are done ("thanks", "done", "good", "bye", "ship it", "looks good", "that's all", "close this") | Write log entry immediately without being asked, then confirm it is saved. |
+
+### The key mental model
+
+Vault writes are not a separate chore after the task — they are the final step of every meaningful task. A session that ends without a log entry is incomplete.
+
+If you had to open a source file because the vault didn't have the answer, that is a vault gap. Write the answer to Architecture before you respond, so the next session doesn't pay the same cost.
+
+### What "immediate" means
+
+For Architecture bullets and Decisions: write before your next tool call. You just learned something — commit it to the vault while the context is fresh.
+
+For task-completion writes (State + Active Work + log entry): write before you send your final response. The user reads "done" — the vault must reflect that too.
+
+### Minimal vs full write
+
+**Minimal** (small tasks — single file change, quick answer):
+- One Architecture bullet if a source file was read and revealed something non-obvious
+- One-line Active Work update if status changed
+- No log entry required
+
+**Full sync** (required when: multiple files read, a decision made, a bug diagnosed and fixed, or meaningful time spent):
+- Update `## State`, `## Active Work`, any changed sections
+- Append log entry to `log.md`
+- Update `last-active` in `project-index.md`
+
+When in doubt: write more, not less. Token cost of a vault write is trivial compared to the cost of re-discovering the same facts next session.
+
+---
+
 ## /brain init
 
 Initialize a new project in the vault and wire up session automation.
