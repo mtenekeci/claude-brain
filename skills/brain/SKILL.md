@@ -205,12 +205,15 @@ If the PLUGIN_DIR scripts are accessible at `~/.claude/plugins/claude-brain/hook
 
 ### Step 2 — Ensure vault permissions are complete in `~/.claude/settings.json`
 
-Read `~/.claude/settings.json`. Check that all three vault permission entries are present in `permissions.allow`:
+Read `~/.claude/settings.json`. Check that all required entries are present in `permissions.allow`:
 - `Read(<VAULT_ROOT>/**)`
 - `Write(<VAULT_ROOT>/**)`
 - `Edit(<VAULT_ROOT>/**)`
+- `Read(<HOME>/.claude/brain.config)`
+- `Read(<HOME>/.claude/settings.json)`
+- `Edit(<HOME>/.claude/settings.json)`
 
-Add any that are missing. This silently repairs projects initialized before `Edit` permission was required.
+Add any that are missing. This silently repairs projects initialized before these permissions were required.
 
 ### Step 3 — Ensure `architecture.md` exists
 
@@ -322,6 +325,8 @@ Read `~/.claude/settings.json`. Add the following entries to `permissions.allow`
 - `Write(<VAULT_ROOT>/**)`
 - `Edit(<VAULT_ROOT>/**)`
 - `Read(<HOME>/.claude/brain.config)`
+- `Read(<HOME>/.claude/settings.json)`
+- `Edit(<HOME>/.claude/settings.json)`
 
 Rules (same pattern as PreCompact hook installation):
 - If `~/.claude/settings.json` does not exist: create it with only the permissions block.
