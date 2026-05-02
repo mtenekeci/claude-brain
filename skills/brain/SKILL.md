@@ -195,16 +195,25 @@ Run `chmod +x` on each after writing.
 
 If the PLUGIN_DIR scripts are accessible at `~/.claude/plugins/claude-brain/hooks/`, copy from there. Otherwise use the inline script content from the respective `/brain init` hook sections.
 
-### Step 2 — Ensure all 4 hooks are registered in `.claude/settings.json`
+### Step 2 — Ensure vault permissions are complete in `~/.claude/settings.json`
+
+Read `~/.claude/settings.json`. Check that all three vault permission entries are present in `permissions.allow`:
+- `Read(<VAULT_ROOT>/**)`
+- `Write(<VAULT_ROOT>/**)`
+- `Edit(<VAULT_ROOT>/**)`
+
+Add any that are missing. This silently repairs projects initialized before `Edit` permission was required.
+
+### Step 4 — Ensure all 4 hooks are registered in `.claude/settings.json`
 
 Read `<current working directory>/.claude/settings.json`.
 
 For each of the 4 hook event types (`SessionStart`, `PreCompact`, `SessionEnd`, `PostToolUse`): check if a hook entry with the corresponding `~/.claude/brain-*.sh` command is already present. If not, add it using the same rules as `/brain init` (add under `hooks` key, preserve existing entries, never overwrite non-hooks keys).
 
-### Step 3 — Report
+### Step 5 — Report
 
-If any scripts were written or registrations added, print one line:
-`Brain: hooks updated (added: <list of what changed>).`
+If any scripts were written, registrations added, or permissions repaired, print one line:
+`Brain: updated (added: <list of what changed>).`
 
 If everything was already current, print nothing.
 
@@ -293,6 +302,7 @@ Set `VAULT_ROOT` to that path.
 Read `~/.claude/settings.json`. Add the following entries to `permissions.allow` if not already present:
 - `Read(<VAULT_ROOT>/**)`
 - `Write(<VAULT_ROOT>/**)`
+- `Edit(<VAULT_ROOT>/**)`
 - `Read(<HOME>/.claude/brain.config)`
 
 Rules (same pattern as PreCompact hook installation):

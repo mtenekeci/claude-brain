@@ -6,13 +6,13 @@ Claude's Obsidian second brain — persistent, project-isolated context across s
 
 - `/brain init` — run once in a project folder. Creates a vault entry and writes a `CLAUDE.md` that auto-loads context every session.
 - Every new session: Claude reads `context.md` + the last session log (~160 lines total) automatically.
-- During work: Claude updates the vault at natural checkpoints (task complete, decision made, before `/compact`).
+- During work: Claude updates the vault proactively — after completing a task, when a decision is made, when architectural facts are discovered, or after reading several source files. No prompting needed.
 - You never tell Claude to load or save context — it manages itself.
 
 ## Requirements
 
 - [Claude Code](https://claude.ai/code) CLI installed
-- [Obsidian](https://obsidian.md) with a vault at `~/Documents/claude-brain/`
+- [Obsidian](https://obsidian.md) (vault can be anywhere — auto-discovered on first run)
 
 ## Install
 
@@ -59,8 +59,8 @@ claude
 Claude asks for the project name and type, then:
 - Creates `~/Documents/claude-brain/projects/my-app/`
 - Writes `CLAUDE.md` to `~/Projects/my-app/`
-- Installs `PreCompact` and `SessionEnd` hooks in `.claude/settings.json`
-- Grants vault read/write permissions in `~/.claude/settings.json`
+- Installs 4 hooks in `.claude/settings.json`: `SessionStart`, `PostToolUse`, `PreCompact`, `SessionEnd`
+- Grants vault read/write/edit permissions in `~/.claude/settings.json`
 
 Every future session in `~/Projects/my-app/` auto-loads vault context without permission prompts.
 
@@ -84,6 +84,8 @@ Run `/brain init` from any directory and choose `topic` when asked. To load cont
 /brain sync
 ```
 
+Both `/brain sync` and `/brain status` also self-heal the project automatically: they update the `CLAUDE.md` brain section and hook scripts to the latest version if outdated, and repair any missing vault permissions.
+
 ### Remove a project from the vault
 
 Permanently deletes vault files and removes the project from the index. Also cleans up `CLAUDE.md` and hooks from the project folder if reachable. Requires typing the slug to confirm.
@@ -94,7 +96,7 @@ Permanently deletes vault files and removes the project from the index. Also cle
 
 ### Disconnect a project without deleting history
 
-Keeps all vault history intact. Removes only the `CLAUDE.md` brain section and `SessionEnd`/`PreCompact` hooks from the project folder — stops auto-loading without losing notes.
+Keeps all vault history intact. Removes only the `CLAUDE.md` brain section and all 4 hooks from the project folder — stops auto-loading without losing notes.
 
 ```
 /brain disconnect my-app
