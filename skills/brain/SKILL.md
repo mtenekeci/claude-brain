@@ -38,12 +38,14 @@ Always use Obsidian wikilinks when referencing other vault files. This builds th
 | What you're writing | Link format |
 |---|---|
 | Reference to a project's context | `[[projects/<slug>/context\|<slug>]]` |
+| Reference to a project's architecture | `[[projects/<slug>/architecture\|<slug> architecture]]` |
 | Reference to a project's log | `[[projects/<slug>/log\|<slug> log]]` |
 | Reference to project index | `[[_system/project-index\|Project Index]]` |
 | Cross-project reference in context.md | `[[projects/<other-slug>/context\|<other-slug>]]` |
 
 **When to add links:**
-- `context.md` — link any mentioned related projects using `[[projects/<slug>/context\|<slug>]]`
+- `context.md` — link any mentioned related projects using `[[projects/<slug>/context\|<slug>]]`; link to architecture.md at the bottom of `## Architecture` section
+- `architecture.md` — link back to context.md in the breadcrumb; link to related projects if relevant
 - `log.md` — link to `context.md` at the top (already in template)
 - `project-index.md` — every slug cell is a wikilink (handled in `/brain init` and `/brain sync`)
 - Decisions section — if a decision relates to another project, link it
@@ -72,7 +74,7 @@ These rules apply at all times — not just when `/brain` commands are invoked. 
 
 | Trigger | What to write |
 |---|---|
-| You read a source file and discovered a non-obvious fact (a pattern, convention, or structure) | One bullet added to `context.md ## Architecture` before your next tool call. The Architecture section is a cache — every fact you write here prevents a future session from re-reading that file. |
+| You read a source file and discovered a non-obvious fact (a pattern, convention, or structure) | Add to `architecture.md` before your next tool call. If `architecture.md` doesn't exist yet, add to `context.md ## Architecture` and create `architecture.md` at the next sync. Every fact written here prevents a future session from re-reading that file. |
 | A decision was made or confirmed | Add to `context.md ## Decisions` immediately. Do not wait for sync. |
 | An open question was resolved | Remove it from `context.md ## Open Questions` immediately. |
 | You've made 15+ tool calls without a vault write | Pause. Ask: "Did I learn anything that belongs in Architecture, Decisions, or Open Questions?" If yes, write it now before continuing. |
@@ -151,11 +153,11 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    | You read a source file and learned something non-obvious | One Architecture bullet, before your next tool call |
    | A decision was made | Add to Decisions immediately |
    | An open question resolved | Remove from Open Questions immediately |
-   | 15+ tool calls since last vault write | Pause — check if Architecture, Decisions, or Open Questions need updating |
+   | 15+ tool calls since last vault write | Pause — check if architecture.md, Decisions, or Open Questions need updating |
    | Discrete task completed (bug fix, feature, investigation) | Update State + Active Work + append log entry, before final response |
    | User signals done ("thanks", "done", "good", "bye", "ship it", "looks good") | Write log entry immediately, confirm saved |
 
-   **Minimal write** (small task, single file): one Architecture bullet if something non-obvious was discovered. No log entry needed.
+   **Minimal write** (small task, single file): one entry added to `architecture.md` if something non-obvious was discovered. No log entry needed.
 
    **Full write** (multiple files read, decision made, bug fixed, meaningful work): update State + Active Work + all changed sections, append log entry.
 
@@ -168,7 +170,13 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    - Hard cap: 150 lines. Compress, never delete.
    - Decisions beyond 5 entries: compress each to one line
    - Resolved open questions: remove immediately
-   - Architecture section: bullets only, no prose. Capture patterns, conventions, and non-obvious structure discovered during exploration — not just directory names. This is the cache that prevents re-reading the same files next session.
+   - Architecture section: 3-5 bullet summary only — the most critical facts for immediate orientation. All detail lives in `architecture.md`. Always ends with: `Full reference: [[projects/<slug>/architecture|Architecture]]`
+
+   ## architecture.md rules
+   - No line cap — depth is the point.
+   - Add a new entry whenever a non-obvious pattern, convention, or structure is discovered.
+   - Sections grow over time — never compress or delete, only add and correct.
+   - Load before making architectural decisions (Tier 2). Do not load at every session start.
    ```
 3. In the existing `CLAUDE.md`, replace everything from the first line up to and including the first `---` separator with the new brain section followed by `\n---\n`.
 4. Write the file back. Do not touch anything after the `---` separator.
@@ -203,6 +211,16 @@ Read `~/.claude/settings.json`. Check that all three vault permission entries ar
 - `Edit(<VAULT_ROOT>/**)`
 
 Add any that are missing. This silently repairs projects initialized before `Edit` permission was required.
+
+### Step 3 — Ensure `architecture.md` exists
+
+Check if `<VAULT_ROOT>/projects/<slug>/architecture.md` exists.
+
+If it does NOT exist (old project initialized before architecture.md was introduced):
+1. Read the current `## Architecture` section from `context.md`.
+2. Create `architecture.md` using the standard template header (see `/brain init` step 3), then add a `## Key Patterns & Conventions` section populated from the Architecture bullets extracted from `context.md`.
+3. In `context.md`, replace the full `## Architecture` section content with a 3-5 bullet summary and the wikilink: `Full reference: [[projects/<slug>/architecture|Architecture]]`
+4. Write both files.
 
 ### Step 4 — Ensure all 4 hooks are registered in `.claude/settings.json`
 
@@ -470,8 +488,8 @@ If the derived slug already appears in the table as a row value, stop and say:
    what the project is, what is working, what stage it is at>
 
    ## Architecture
-   <bullets from file structure + manifest: key directories, tech stack, runtime, notable dependencies.
-   If DEEP_SCAN_NOTES exist: add bullets for each pattern, abstraction, and convention found — not just directory names. These are the facts that prevent a future session from re-reading the same files.>
+   <3-5 bullet summary of the most critical facts a new session needs immediately: tech stack, entry points, key patterns.>
+   Full reference: [[projects/<slug>/architecture|Architecture]]
 
    ## Active Work
    <from last 5-10 git commits or CLAUDE.md active work:
@@ -495,7 +513,44 @@ If the derived slug already appears in the table as a row value, stop and say:
 
    For a brand new empty project (Step A returned no existing work): use the template defaults with a shallow top-level file listing under Architecture.
 
-3. Write `log.md`:
+3. Write `architecture.md`:
+
+   Create `<VAULT_ROOT>/projects/<slug>/architecture.md` with the following structure:
+
+   ```markdown
+   ---
+   project: <slug>
+   type: architecture
+   updated: <YYYY-MM-DD>
+   up: "[[projects/<slug>/context|<slug>]]"
+   ---
+
+   ← [[projects/<slug>/context|<slug> context]] | [[projects/<slug>/log|Session Log]]
+
+   # <Project Display Name> — Architecture Reference
+
+   > Living document. Update when a new major component, pattern, or constraint is added.
+
+   ---
+   ```
+
+   Then append sections populated from the gathered sources (Steps B–F). Include as many sections as are meaningful for the project. Typical sections:
+
+   - `## Technology Stack` — table of layers → technologies
+   - `## Repository Layout` — annotated directory tree (code block)
+   - `## Key Patterns & Conventions` — non-obvious rules a new session must know to avoid wrong assumptions (e.g. "all DB calls go through X", "auth is enforced in Y not Z", naming conventions)
+   - `## Data Flow` — how data moves through the system (if non-trivial)
+   - Additional domain-specific sections as needed (Routes, Schema, Integrations, CI/CD, etc.)
+
+   If DEEP_SCAN_NOTES exist: use them to populate Key Patterns & Conventions and any domain-specific sections with real extracted facts — not generic placeholders.
+
+   For a brand new empty project: write only the header and a `## Technology Stack` placeholder section.
+
+   No line cap on `architecture.md`. Depth is the point.
+
+   Apply contextual wikilinks (see Linking rules) to all prose sections.
+
+4. Write `log.md`:
    - Read `~/.claude/plugins/claude-brain/templates/log.md`
    - Replace `{date}` with today's date in `YYYY-MM-DD` format
    - Replace `{slug}` with the slug
@@ -879,6 +934,12 @@ Run **Hook health check** (see above).
 
 Read `<VAULT_ROOT>/_system/project-index.md` and extract all project slugs from the table. Store as `KNOWN_SLUGS` — used for contextual wikilinks when updating content.
 
+### Update architecture.md
+
+If architectural facts were discovered this session (new patterns, conventions, or structural changes), append them to the relevant section in `VAULT_PROJECT/architecture.md`. Update the frontmatter `updated:` field.
+
+If `architecture.md` does not exist: run the Step 3 repair from the Hook health check to create it from context.md's Architecture section.
+
 ### Update context.md
 
 Read `VAULT_PROJECT/context.md`. Then rewrite these sections:
@@ -887,11 +948,11 @@ Read `VAULT_PROJECT/context.md`. Then rewrite these sections:
 - `## Active Work` — what is currently in progress
 - `## Decisions` — add any decisions made this session (do not remove existing entries yet)
 - `## Open Questions` — remove any questions that were resolved this session; add new ones
+- `## Architecture` — keep as a 3-5 bullet summary. If the wikilink to architecture.md is missing, add it: `Full reference: [[projects/<slug>/architecture|Architecture]]`
 
 Line count check: count lines in the updated file.
 If count > 150:
 - In `## Decisions`, find all entries beyond the 5 most recent. Replace each with a one-line summary: `- [<date>] <one-sentence summary of that decision>`
-- In `## Architecture`, remove any bullet that describes something no longer in the codebase
 
 Update the frontmatter `updated:` field to today's date in `YYYY-MM-DD`.
 

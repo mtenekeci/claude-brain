@@ -117,7 +117,8 @@ Keeps all vault history intact. Removes only the `CLAUDE.md` brain section and a
 │   └── project-index.md      ← registry of all projects
 └── projects/
     └── <slug>/
-        ├── context.md        ← compiled project knowledge (≤150 lines)
+        ├── context.md        ← state, active work, decisions (≤150 lines)
+        ├── architecture.md   ← detailed architecture reference (no line cap)
         └── log.md            ← append-only session log
 ```
 
