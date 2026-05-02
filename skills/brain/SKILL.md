@@ -176,6 +176,40 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
 
 ---
 
+## Hook health check
+
+A reusable sub-procedure. Run this whenever CLAUDE.md is read to identify the current project (i.e. in `/brain sync` and `/brain status`). Ensures all hook scripts exist and are registered.
+
+### Step 1 — Ensure all 4 hook scripts are installed
+
+For each of the 4 hook scripts, always overwrite with the current version (these are plugin-managed files, not user-customised):
+
+```
+~/.claude/brain-session-start.sh    ← from SKILL.md SessionStart hook section
+~/.claude/brain-precompact.sh       ← from SKILL.md PreCompact hook section
+~/.claude/brain-session-end.sh      ← from SKILL.md SessionEnd hook section
+~/.claude/brain-post-tool-use.sh    ← from SKILL.md PostToolUse hook section
+```
+
+Run `chmod +x` on each after writing.
+
+If the PLUGIN_DIR scripts are accessible at `~/.claude/plugins/claude-brain/hooks/`, copy from there. Otherwise use the inline script content from the respective `/brain init` hook sections.
+
+### Step 2 — Ensure all 4 hooks are registered in `.claude/settings.json`
+
+Read `<current working directory>/.claude/settings.json`.
+
+For each of the 4 hook event types (`SessionStart`, `PreCompact`, `SessionEnd`, `PostToolUse`): check if a hook entry with the corresponding `~/.claude/brain-*.sh` command is already present. If not, add it using the same rules as `/brain init` (add under `hooks` key, preserve existing entries, never overwrite non-hooks keys).
+
+### Step 3 — Report
+
+If any scripts were written or registrations added, print one line:
+`Brain: hooks updated (added: <list of what changed>).`
+
+If everything was already current, print nothing.
+
+---
+
 ## /brain init
 
 Initialize a new project in the vault and wire up session automation.
@@ -534,7 +568,7 @@ echo "BRAIN SYNC: Checkpoint written to log.md (Session $((N+1))) with git conte
 
 Then make it executable: `chmod +x <HOME>/.claude/brain-precompact.sh`
 
-If `~/.claude/brain-precompact.sh` already exists: skip (do not overwrite).
+Always overwrite `~/.claude/brain-precompact.sh` — this is a plugin-managed file.
 
 **Step 2 — Add the PreCompact hook to `.claude/settings.json`**
 
@@ -613,7 +647,7 @@ fi
 
 Make it executable: `chmod +x <HOME>/.claude/brain-post-tool-use.sh`
 
-If `~/.claude/brain-post-tool-use.sh` already exists: skip (do not overwrite).
+Always overwrite `~/.claude/brain-post-tool-use.sh` — this is a plugin-managed file.
 
 Add to `<current working directory>/.claude/settings.json`:
 
@@ -668,7 +702,7 @@ echo "Brain: read these files now before responding to any message:
 
 Make it executable: `chmod +x <HOME>/.claude/brain-session-start.sh`
 
-If `~/.claude/brain-session-start.sh` already exists: skip (do not overwrite).
+Always overwrite `~/.claude/brain-session-start.sh` — this is a plugin-managed file.
 
 Add to `<current working directory>/.claude/settings.json`:
 
@@ -742,7 +776,7 @@ Then make it executable:
 chmod +x <HOME>/.claude/brain-session-end.sh
 ```
 
-If `~/.claude/brain-session-end.sh` already exists: skip (do not overwrite — the user may have customised it).
+Always overwrite `~/.claude/brain-session-end.sh` — this is a plugin-managed file.
 
 **Step 2 — Add the SessionEnd hook to `.claude/settings.json`**
 
@@ -829,6 +863,7 @@ If not found: ask "Which project slug should I sync? (run `/brain status` to lis
 Set `VAULT_PROJECT = <VAULT_ROOT>/projects/<slug>`
 
 Run **Brain section health check** (see above).
+Run **Hook health check** (see above).
 
 ### Load known slugs
 
@@ -901,6 +936,7 @@ Check CLAUDE.md in current directory for the `vault:` line, extract slug as last
 If no project found: read `<VAULT_ROOT>/_system/project-index.md` and print all registered projects, then ask which to inspect.
 
 Run **Brain section health check** (see above).
+Run **Hook health check** (see above).
 
 ### Read and display
 
