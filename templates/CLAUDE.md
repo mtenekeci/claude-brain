@@ -3,12 +3,12 @@
 vault: {vault-root}/projects/{slug}
 
 ## Context protocol
-On session start:
+On session start (auto-loaded by SessionStart hook):
 1. Read `context.md` in full
-2. Read last entry of `log.md` only
+2. Read `architecture.md` in full
+3. Read last entry of `log.md` only
 
 During the session — load more when needed, not upfront:
-3. Before working on code or making architectural changes → read `architecture.md` (Tier 2)
 4. Before any significant design choice → read last 5 `log.md` entries (Tier 2)
 5. When asked about history, past decisions, or "what did we do about X" → read full `log.md` (Tier 3)
 6. When context.md feels incomplete for the current task → re-read it

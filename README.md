@@ -126,9 +126,9 @@ Keeps all vault history intact. Removes only the `CLAUDE.md` brain section and a
 
 | Scenario | Lines loaded |
 |----------|-------------|
-| Session start (Tier 1) | ~160 |
-| Before architectural decision (Tier 2) | ~200 |
-| Deep history trace (Tier 3) | ~300–500 |
+| Session start (Tier 1) | ~260–360 (context.md + architecture.md + last log entry) |
+| Before significant design choice (Tier 2) | +40 lines (last 5 log entries) |
+| Deep history trace (Tier 3) | +200–400 lines (full log) |
 | Re-discovering from scratch | 2,000–10,000+ |
 
 ## License

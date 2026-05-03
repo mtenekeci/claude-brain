@@ -60,5 +60,7 @@ if [ $((COUNT % 3)) -eq 0 ] && [ "$COUNT" -le 9 ]; then
   SLUG=$(awk -F'/' '/^vault:/{print $NF}' CLAUDE.md 2>/dev/null | tr -d '[:space:]') || true
   CONTEXT_PATH=""
   [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH=" ($VAULT/projects/$SLUG/context.md)"
-  echo "Brain: $COUNT source files read this session. Before continuing, update the Architecture section in context.md${CONTEXT_PATH} with what you've learned — so future sessions don't re-read these files."
+  ARCH_PATH=""
+  [ -n "$VAULT" ] && [ -n "$SLUG" ] && ARCH_PATH=" ($VAULT/projects/$SLUG/architecture.md)"
+  echo "Brain: $COUNT source files read this session. Before continuing, update architecture.md${ARCH_PATH} with what you've learned — so future sessions don't re-read these files."
 fi
