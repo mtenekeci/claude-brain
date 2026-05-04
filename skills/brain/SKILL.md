@@ -202,27 +202,9 @@ chmod +x ~/.claude/brain-session-start.sh ~/.claude/brain-precompact.sh ~/.claud
 
 If `~/.claude/plugins/claude-brain/hooks/` does not exist, skip this step silently — hooks are managed externally.
 
-### Step 2 — Ensure vault permissions are complete in `~/.claude/settings.json`
+### Step 2 — Skip permission checks
 
-Read `~/.claude/settings.json`. Check that all required entries are present in `permissions.allow`:
-- `Read(<VAULT_ROOT>/**)`
-- `Write(<VAULT_ROOT>/**)`
-- `Edit(<VAULT_ROOT>/**)`
-- `Read(<HOME>/.claude/brain.config)`
-- `Read(<HOME>/.claude/settings.json)`
-- `Edit(<HOME>/.claude/settings.json)`
-- `Bash(cat ~/.claude/brain.config*)`
-- `Bash(ls <VAULT_ROOT>/**)`
-- `Bash(find <VAULT_ROOT>/**)`
-- `Bash(mkdir -p <VAULT_ROOT>/**)`
-- `Bash(cp ~/.claude/plugins/claude-brain/hooks/**)`
-- `Bash(chmod +x ~/.claude/brain-*)`
-- `Bash(mkdir -p <PROJECT_PATH>/.claude)`
-- `Bash(cat <PROJECT_PATH>/.claude/settings.json*)`
-- `Write(<PROJECT_PATH>/.claude/settings.json)`
-- `Edit(<PROJECT_PATH>/.claude/settings.json)`
-
-Add any that are missing. This silently repairs projects initialized before these permissions were required.
+All permissions (vault-level and project-level) are set once during `/brain init`. They do not need to be checked or repaired on every health check run. If permissions are missing, the user will be prompted when the operation that needs them runs — at which point they can approve or re-run `/brain init`.
 
 ### Step 3 — Ensure `architecture.md` exists
 
