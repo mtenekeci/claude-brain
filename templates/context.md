@@ -24,5 +24,8 @@ None yet.
 ## Open Questions
 None yet.
 
+## Hard Rules
+(non-negotiable project rules — git workflow, testing gates, deployment procedure, approval requirements)
+
 ## Constraints
-(add anything Claude must never change, assume, or override)
+(technical constraints — version pins, API compatibility, framework limitations)

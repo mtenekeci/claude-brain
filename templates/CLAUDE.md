@@ -4,9 +4,10 @@ vault: {vault-root}/projects/{slug}
 
 ## Context protocol
 On session start (auto-loaded by SessionStart hook):
-1. Read `context.md` in full
+1. Read `context.md` in full (even if visible in system-reminder after compaction — re-read to engage with rules)
 2. Read `architecture.md` in full
 3. Read last entry of `log.md` only
+4. If `context.md ## Hard Rules` contains entries, hold them in active attention — they gate risky actions
 
 During the session — load more when needed, not upfront:
 4. Before any significant design choice → read last 5 `log.md` entries (Tier 2)
@@ -18,6 +19,26 @@ Before opening any source file to understand how something works, check `archite
 
 Never answer from memory when the vault has the authoritative record.
 
+## Pre-Action Checklist
+
+Before ANY of these actions, STOP and check `context.md` Hard Rules + `architecture.md` for relevant constraints:
+- Git merge to main/master
+- Force push
+- PR creation
+- Branch deletion
+- Docker deployment
+- Database migration
+- npm publish / package release
+- Breaking API changes
+
+Check for:
+- Workflow rules (PR-first? review required? branch protection?)
+- Testing requirements (must pass before merge/deploy?)
+- Deployment procedures (staging-first? approval needed?)
+- Dependency constraints (version pinning? compatibility?)
+
+If rules exist and conflict with the action, stop and ask the user.
+
 ## Write protocol
 
 **Write triggers — act on these without being asked:**
@@ -27,7 +48,9 @@ Never answer from memory when the vault has the authoritative record.
 | You read a source file and learned something non-obvious | Add to `architecture.md`, before your next tool call |
 | A decision was made | Add to Decisions immediately |
 | An open question resolved | Remove from Open Questions immediately |
-| 15+ tool calls since last vault write | Pause — check if `architecture.md`, Decisions, or Open Questions need updating |
+| Before PR creation | Read last 5 log entries, update State + Active Work, append log entry |
+| Before git merge to main | Update log entry with merge summary + outcome |
+| After phase/milestone completion | Full sync: State, Active Work, log entry, compress context.md if >150 lines |
 | Discrete task completed (bug fix, feature, investigation) | Update State + Active Work + append log entry, before final response |
 | User signals done ("thanks", "done", "good", "bye", "ship it", "looks good") | Write log entry immediately, confirm saved |
 
@@ -50,4 +73,4 @@ Writing to the vault is not a separate chore — it is the last step of every me
 - No line cap — depth is the point.
 - Add a new entry whenever a non-obvious pattern, convention, or structure is discovered.
 - Never compress or delete — only add and correct.
-- Load before making architectural decisions (Tier 2), not at every session start.
+- Auto-loaded at session start — always in context.

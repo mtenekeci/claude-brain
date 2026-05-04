@@ -206,7 +206,9 @@ If `~/.claude/plugins/claude-brain/hooks/` does not exist, skip this step silent
 
 All permissions (vault-level and project-level) are set once during `/brain init`. They do not need to be checked or repaired on every health check run. If permissions are missing, the user will be prompted when the operation that needs them runs — at which point they can approve or re-run `/brain init`.
 
-### Step 3 — Ensure `architecture.md` exists
+### Step 3 — Ensure `architecture.md` and `## Hard Rules` exist
+
+**Part A: architecture.md**
 
 Check if `<VAULT_ROOT>/projects/<slug>/architecture.md` exists.
 
@@ -215,6 +217,15 @@ If it does NOT exist (old project initialized before architecture.md was introdu
 2. Create `architecture.md` using the standard template header (see `/brain init` step 3), then add a `## Key Patterns & Conventions` section populated from the Architecture bullets extracted from `context.md`.
 3. In `context.md`, replace the full `## Architecture` section content with a 3-5 bullet summary and the wikilink: `Full reference: [[projects/<slug>/architecture|Architecture]]`
 4. Write both files.
+
+**Part B: Hard Rules section**
+
+Check if `context.md` contains `## Hard Rules`.
+
+If it does NOT exist (old project initialized before Hard Rules was added):
+1. Read `context.md`.
+2. Insert a new `## Hard Rules` section immediately before `## Constraints`, with placeholder text: `None documented yet.`
+3. Write `context.md` back.
 
 ### Step 4 — Ensure all 4 hooks are registered in `.claude/settings.json`
 
@@ -510,8 +521,14 @@ If the derived slug already appears in the table as a row value, stop and say:
    <from CLAUDE.md or memory if any were recorded.
    If none found, write "None yet.">
 
+   ## Hard Rules
+   <from CLAUDE.md, git hooks, CI config: non-negotiable workflow rules.
+   Examples: "PR required for main branch", "All tests must pass", "Staging before production".
+   If none found, write "None documented yet.">
+
    ## Constraints
-   <from CLAUDE.md constraints section or memory if any.
+   <from CLAUDE.md constraints section or memory if any: technical limitations.
+   Examples: "Node 18+", "PostgreSQL 14 only", "Max 1MB file upload".
    If none found, write "None documented yet.">
    ```
 
