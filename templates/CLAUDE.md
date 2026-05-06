@@ -2,6 +2,20 @@
 
 vault: {vault-root}/projects/{slug}
 
+## Hard rules
+
+These are non-negotiable. They override default reasoning and cannot be skipped for any task, however simple it seems.
+
+1. **Vault before code.** Before opening any source file to understand how something works, check `context.md` Architecture first. Only open the file if the vault doesn't have the answer.
+
+2. **Vault miss = vault update.** If you opened a source file because the vault lacked the answer, you MUST update the Architecture section before moving on. Every miss must pay for itself.
+
+3. **No session ends without a log entry.** If meaningful work was done, write a `log.md` entry before the session closes — without being asked. A session with no log entry is incomplete work.
+
+4. **Vault is the source of truth.** Never answer questions about project state, decisions, or history from memory alone. Read the vault first.
+
+5. **Context is a living document.** When `context.md` becomes stale, fix it inline — do not defer. Future sessions depend on it being accurate.
+
 ## Context protocol
 On session start (auto-loaded by SessionStart hook):
 1. Read `context.md` in full (even if visible in system-reminder after compaction — re-read to engage with rules)
