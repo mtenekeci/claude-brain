@@ -19,14 +19,16 @@ These are non-negotiable. They override default reasoning and cannot be skipped 
 ## Context protocol
 On session start (auto-loaded by SessionStart hook):
 1. Read `context.md` in full (even if visible in system-reminder after compaction — re-read to engage with rules)
-2. Read `architecture.md` in full
-3. Read last entry of `log.md` only
-4. If `context.md ## Hard Rules` contains entries, hold them in active attention — they gate risky actions
+2. Read last entry of `log.md` only
+3. If `context.md ## Hard Rules` contains entries, hold them in active attention — they gate risky actions
+
+Tier 2 — load on demand, not upfront:
+4. Before any architectural decision or significant design choice → read `architecture.md` in full
+5. Before any significant design choice → also read last 5 `log.md` entries
 
 During the session — load more when needed, not upfront:
-4. Before any significant design choice → read last 5 `log.md` entries (Tier 2)
-5. When asked about history, past decisions, or "what did we do about X" → read full `log.md` (Tier 3)
-6. When context.md feels incomplete for the current task → re-read it
+6. When asked about history, past decisions, or "what did we do about X" → read full `log.md` (Tier 3)
+7. When context.md feels incomplete for the current task → re-read it
 
 **Vault before code — always:**
 Before opening any source file to understand how something works, check `architecture.md` first. Only open the file if the vault doesn't have the answer. If you had to open the file because the vault was missing it — that is a vault gap: update `architecture.md` after reading so the next session doesn't pay the same cost.
@@ -55,17 +57,24 @@ If rules exist and conflict with the action, stop and ask the user.
 
 ## Write protocol
 
-**Write triggers — act on these without being asked:**
+**Non-negotiable checkpoints — enforced by hooks, act immediately:**
+
+| Trigger | What to write | Timing |
+|---|---|---|
+| `git commit` runs | Update `## State` + `## Active Work` in context.md | Before the next response |
+| Subagent (Agent tool) completes | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
+| Source file read revealed something non-obvious | One architecture.md bullet | Before the next tool call |
+| Decision made | Add to `## Decisions` | Immediately |
+| Open question resolved | Remove from `## Open Questions` | Immediately |
+
+**Advisory triggers — self-enforce these:**
 
 | When | Write |
 |---|---|
-| You read a source file and learned something non-obvious | Add to `architecture.md`, before your next tool call |
-| A decision was made | Add to Decisions immediately |
-| An open question resolved | Remove from Open Questions immediately |
 | Before PR creation | Read last 5 log entries, update State + Active Work, append log entry |
 | Before git merge to main | Update log entry with merge summary + outcome |
 | After phase/milestone completion | Full sync: State, Active Work, log entry, compress context.md if >150 lines |
-| Discrete task completed (bug fix, feature, investigation) | Update State + Active Work + append log entry, before final response |
+| 15+ tool calls since last vault write | Pause — check if architecture.md, Decisions, or Open Questions need updating |
 | User signals done ("thanks", "done", "good", "bye", "ship it", "looks good") | Write log entry immediately, confirm saved |
 
 **Minimal write** (small task, single file): one entry added to `architecture.md` if something non-obvious was discovered. No log entry needed.
@@ -87,4 +96,4 @@ Writing to the vault is not a separate chore — it is the last step of every me
 - No line cap — depth is the point.
 - Add a new entry whenever a non-obvious pattern, convention, or structure is discovered.
 - Never compress or delete — only add and correct.
-- Auto-loaded at session start — always in context.
+- Loaded on demand (Tier 2) — before architectural decisions, not at session start. Keeps session start lean.

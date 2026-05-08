@@ -72,11 +72,20 @@ These rules apply at all times — not just when `/brain` commands are invoked. 
 
 ### When to write
 
+**Non-negotiable checkpoints — enforced by hooks, act immediately:**
+
+| Trigger | What to write | Timing |
+|---|---|---|
+| `git commit` runs (detected by PostToolUse hook on Bash tool) | Update `## State` + `## Active Work` in context.md | Before the next response |
+| Subagent (Agent tool) completes (detected by PostToolUse hook) | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
+| You read a source file and discovered a non-obvious fact | Add to `architecture.md` before your next tool call. If `architecture.md` doesn't exist yet, add to `context.md ## Architecture` and create `architecture.md` at the next sync. | Before the next tool call |
+| A decision was made or confirmed | Add to `context.md ## Decisions` immediately. Do not wait for sync. | Immediately |
+| An open question was resolved | Remove it from `context.md ## Open Questions` immediately. | Immediately |
+
+**Advisory triggers — self-enforce these:**
+
 | Trigger | What to write |
 |---|---|
-| You read a source file and discovered a non-obvious fact (a pattern, convention, or structure) | Add to `architecture.md` before your next tool call. If `architecture.md` doesn't exist yet, add to `context.md ## Architecture` and create `architecture.md` at the next sync. Every fact written here prevents a future session from re-reading that file. |
-| A decision was made or confirmed | Add to `context.md ## Decisions` immediately. Do not wait for sync. |
-| An open question was resolved | Remove it from `context.md ## Open Questions` immediately. |
 | You've made 15+ tool calls without a vault write | Pause. Ask: "Did I learn anything that belongs in Architecture, Decisions, or Open Questions?" If yes, write it now before continuing. |
 | A discrete task completed (bug fix, feature, investigation, refactor) | Before writing your final response: update `## State` + `## Active Work`, append a `log.md` entry. |
 | The user signals they are done ("thanks", "done", "good", "bye", "ship it", "looks good", "that's all", "close this") | Write log entry immediately without being asked, then confirm it is saved. |
@@ -135,9 +144,10 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    2. Read last entry of `log.md` only
 
    During the session — load more when needed, not upfront:
-   3. Before any architectural decision or significant design choice → read last 5 `log.md` entries (Tier 2)
-   4. When asked about history, past decisions, or "what did we do about X" → read full `log.md` (Tier 3)
-   5. When context.md feels incomplete for the current task → re-read it
+   3. Before any architectural decision or significant design choice → read `architecture.md` in full (Tier 2)
+   4. Before any significant design choice → also read last 5 `log.md` entries (Tier 2)
+   5. When asked about history, past decisions, or "what did we do about X" → read full `log.md` (Tier 3)
+   6. When context.md feels incomplete for the current task → re-read it
 
    **Vault before code — always:**
    Before opening any source file to understand how something works, check the `context.md` Architecture section first. Only open the file if the vault doesn't have the answer. If you had to open the file because the vault was missing it — that is a vault gap: update Architecture after reading so the next session doesn't pay the same cost.
@@ -146,13 +156,20 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
 
    ## Write protocol
 
-   **Write triggers — act on these without being asked:**
+   **Non-negotiable checkpoints — enforced by hooks, act immediately:**
+
+   | Trigger | What to write | Timing |
+   |---|---|---|
+   | `git commit` runs | Update `## State` + `## Active Work` in context.md | Before the next response |
+   | Subagent (Agent tool) completes | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
+   | Source file read revealed something non-obvious | One architecture.md bullet | Before the next tool call |
+   | Decision made | Add to `## Decisions` | Immediately |
+   | Open question resolved | Remove from `## Open Questions` | Immediately |
+
+   **Advisory triggers — self-enforce these:**
 
    | When | Write |
    |---|---|
-   | You read a source file and learned something non-obvious | One Architecture bullet, before your next tool call |
-   | A decision was made | Add to Decisions immediately |
-   | An open question resolved | Remove from Open Questions immediately |
    | 15+ tool calls since last vault write | Pause — check if architecture.md, Decisions, or Open Questions need updating |
    | Discrete task completed (bug fix, feature, investigation) | Update State + Active Work + append log entry, before final response |
    | User signals done ("thanks", "done", "good", "bye", "ship it", "looks good") | Write log entry immediately, confirm saved |
@@ -176,7 +193,7 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    - No line cap — depth is the point.
    - Add a new entry whenever a non-obvious pattern, convention, or structure is discovered.
    - Sections grow over time — never compress or delete, only add and correct.
-   - Load before making architectural decisions (Tier 2). Do not load at every session start.
+   - Loaded on demand (Tier 2) — before architectural decisions, not at session start.
    ```
 3. In the existing `CLAUDE.md`, replace everything from the first line up to and including the first `---` separator with the new brain section followed by `\n---\n`.
 4. Write the file back. Do not touch anything after the `---` separator.
@@ -624,7 +641,7 @@ Rules:
 
 ### If code project: install PostToolUse hook
 
-The PostToolUse hook counts source file reads per session and reminds Claude to update vault Architecture after every 3 source files — fires at exactly the right moment, mid-session, when knowledge is fresh.
+The PostToolUse hook has three triggers: (1) counts source file reads and reminds Claude to update architecture.md every 3 reads; (2) detects `git commit` Bash calls and immediately prompts Claude to update context.md State + Active Work; (3) detects Agent tool completions (superpowers tasks) and prompts an architecture/context sync check.
 
 Run:
 
