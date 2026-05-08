@@ -699,7 +699,7 @@ Apply same rules as other hooks: add under `hooks` key, skip if already present.
 
 ### If code project: install SessionEnd hook
 
-The SessionEnd hook writes a git-enriched auto-close log marker when a session ends without a manual `/brain sync`. The next `/brain sync` replaces it with real content.
+The SessionEnd hook writes a meaningful auto-close log entry when a session ends without a manual `/brain sync`. If commits were made today, the `Completed` field lists them (up to 5); otherwise it notes that no commits were made. The `Changed` field is built from committed + unstaged files. The next `/brain sync` can replace this with fuller detail if needed.
 
 **Step 1 — Install the hook script to a stable path**
 
