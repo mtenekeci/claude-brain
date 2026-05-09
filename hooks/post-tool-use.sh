@@ -61,6 +61,24 @@ if [ "$TOOL_NAME" = "Agent" ]; then
     exit 0
 fi
 
+# ── Skill tool — detect superpowers skill completion ─────────────────────────
+
+if [ "$TOOL_NAME" = "Skill" ]; then
+    SKILL_NAME=$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    print(d.get('tool_input', {}).get('skill', ''))
+except:
+    pass
+" "$INPUT" 2>/dev/null) || true
+
+    CONTEXT_PATH=""
+    [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH=" ($VAULT/projects/$SLUG/context.md)"
+    echo "Brain: skill '${SKILL_NAME}' completed inline. If this produced decisions, patterns, or completed work → update context.md${CONTEXT_PATH} State + Active Work before continuing."
+    exit 0
+fi
+
 # ── Read tool — count source file reads, remind to update architecture.md ─────
 
 [ "$TOOL_NAME" = "Read" ] || exit 0
