@@ -143,6 +143,8 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    1. Read `context.md` in full
    2. Read last entry of `log.md` only
 
+   **A compacted conversation summary is not a vault read.** Even if the thread already contains dense, accurate-looking project context, you must still read `context.md` at session start. The summary does not contain Hard Rules or the full write protocol. Do not rationalize it away.
+
    During the session — load more when needed, not upfront:
    3. Before any architectural decision or significant design choice → read `architecture.md` in full (Tier 2)
    4. Before any significant design choice → also read last 5 `log.md` entries (Tier 2)
@@ -161,6 +163,7 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    | Trigger | What to write | Timing |
    |---|---|---|
    | `git commit` runs | Update `## State` + `## Active Work` in context.md | Before the next response |
+   | `git push` runs | Read `## Hard Rules` in context.md — confirm nothing is being violated before push completes | Before push executes |
    | Subagent (Agent tool) completes | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
    | Source file read revealed something non-obvious | One architecture.md bullet | Before the next tool call |
    | Decision made | Add to `## Decisions` | Immediately |

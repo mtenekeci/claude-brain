@@ -42,6 +42,13 @@ except:
     pass
 " "$INPUT" 2>/dev/null) || true
 
+    if echo "$CMD" | grep -qE "git push"; then
+        CONTEXT_PATH=""
+        [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH=" ($VAULT/projects/$SLUG/context.md)"
+        echo "Brain: git push detected. Before this push completes, read ## Hard Rules in context.md${CONTEXT_PATH} and confirm nothing is being violated. This is the irreversible moment."
+        exit 0
+    fi
+
     echo "$CMD" | grep -qE "git commit" || exit 0
 
     CONTEXT_PATH=""
