@@ -53,7 +53,7 @@ except:
 
     CONTEXT_PATH=""
     [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH=" ($VAULT/projects/$SLUG/context.md)"
-    echo "Brain: git commit detected. Before your next response, update context.md ## State and ## Active Work${CONTEXT_PATH} to reflect what just changed. Do not wait for /brain sync."
+    echo "Brain: VAULT WRITE REQUIRED — git commit just landed. Your next action MUST be an Edit to context.md${CONTEXT_PATH} updating ## State and ## Active Work to reflect this commit. Do this BEFORE any further code work, BEFORE responding to the user, and do NOT batch it with later commits. Skipping this leaves the brain stale for the rest of the session."
     exit 0
 fi
 

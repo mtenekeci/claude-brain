@@ -11,7 +11,7 @@ Claude Code plugin that gives Claude a persistent Obsidian second brain. Install
 | Path | Role |
 |---|---|
 | `skills/brain/SKILL.md` | Full behavioral spec for all `/brain` subcommands — the authoritative source of truth |
-| `hooks/session-start.sh` | Injects vault file paths into context before first prompt |
+| `hooks/session-start.sh` | Injects full context.md + last log entry content directly into context before first prompt (not just paths) |
 | `hooks/session-end.sh` | Writes a git-enriched auto-close log entry when session ends without a manual sync |
 | `hooks/precompact.sh` | Writes a checkpoint entry + tells Claude to fill in details before `/compact` |
 | `hooks/post-tool-use.sh` | Counts source file reads; reminds Claude to update vault Architecture every 3 reads |
