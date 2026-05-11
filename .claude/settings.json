@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(~/Documents/claude-brain/_system/*)",
+      "Read(~/Documents/claude-brain/projects/*)"
+    ]
+  }
+}

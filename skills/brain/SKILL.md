@@ -76,6 +76,7 @@ These rules apply at all times — not just when `/brain` commands are invoked. 
 
 | Trigger | What to write | Timing |
 |---|---|---|
+| About to run `git push` | Run `git branch --show-current` and compare to the expected sub-branch named in `## Active Work`. If they differ, STOP — surface the mismatch to the user before pushing. Also re-read `## Hard Rules` to confirm nothing is being violated. | Before push executes |
 | `git commit` runs (detected by PostToolUse hook on Bash tool) | Update `## State` + `## Active Work` in context.md | Before the next response |
 | Subagent (Agent tool) completes (detected by PostToolUse hook) | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
 | You read a source file and discovered a non-obvious fact | Add to `architecture.md` before your next tool call. If `architecture.md` doesn't exist yet, add to `context.md ## Architecture` and create `architecture.md` at the next sync. | Before the next tool call |
@@ -124,7 +125,7 @@ A reusable sub-procedure. Run this whenever CLAUDE.md is read to identify the cu
 
 ### What to check
 
-After reading `CLAUDE.md` and extracting the slug, check whether the brain section (everything before the first `---` separator) contains `## Write protocol`.
+After reading `CLAUDE.md` and extracting the slug, check whether the brain section (everything before the first `---` separator) contains the phrase `Branch reconciliation after resume`.
 
 - If it does → brain section is current. Continue.
 - If it does not → brain section is outdated. Run the update below.
@@ -145,6 +146,8 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
 
    **A compacted conversation summary is not a vault read.** Even if the thread already contains dense, accurate-looking project context, you must still read `context.md` at session start. The summary does not contain Hard Rules or the full write protocol. Do not rationalize it away.
 
+   **Branch reconciliation after resume.** Compaction summaries often freeze a stale branch name as "current" — treat them as untrusted on branch state. After reading `context.md`, if you are about to run any git operation (push, merge, PR), run `git branch --show-current` and reconcile against the expected sub-branch in `## Active Work`. If they differ, surface the mismatch to the user before acting.
+
    During the session — load more when needed, not upfront:
    3. Before any architectural decision or significant design choice → read `architecture.md` in full (Tier 2)
    4. Before any significant design choice → also read last 5 `log.md` entries (Tier 2)
@@ -163,7 +166,7 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    | Trigger | What to write | Timing |
    |---|---|---|
    | `git commit` runs | Update `## State` + `## Active Work` in context.md | Before the next response |
-   | `git push` runs | Read `## Hard Rules` in context.md — confirm nothing is being violated before push completes | Before push executes |
+   | About to run `git push` | Run `git branch --show-current` and compare to the expected sub-branch named in `## Active Work`. If they differ, STOP and surface the mismatch before pushing. Also re-read `## Hard Rules`. | Before push executes |
    | Subagent (Agent tool) completes | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
    | Source file read revealed something non-obvious | One architecture.md bullet | Before the next tool call |
    | Decision made | Add to `## Decisions` | Immediately |

@@ -45,7 +45,8 @@ except:
     if echo "$CMD" | grep -qE "git push"; then
         CONTEXT_PATH=""
         [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH=" ($VAULT/projects/$SLUG/context.md)"
-        echo "Brain: git push detected. Before this push completes, read ## Hard Rules in context.md${CONTEXT_PATH} and confirm nothing is being violated. This is the irreversible moment."
+        CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "?")
+        echo "Brain: git push just ran on branch '${CURRENT_BRANCH}'. Verify NOW: (1) does this branch match the expected sub-branch in ## Active Work in context.md${CONTEXT_PATH}? If not, the push went to the wrong target — tell the user immediately. (2) Does the push respect ## Hard Rules? For all future pushes this session, run 'git branch --show-current' BEFORE pushing and reconcile against Active Work."
         exit 0
     fi
 

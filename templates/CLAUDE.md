@@ -22,6 +22,8 @@ On session start (auto-loaded by SessionStart hook):
 2. Read last entry of `log.md` only
 3. If `context.md ## Hard Rules` contains entries, hold them in active attention — they gate risky actions
 
+**Branch reconciliation after resume.** Compaction summaries often freeze a stale branch name as "current" — treat them as untrusted on branch state. Before any git push, merge, or PR creation, run `git branch --show-current` and reconcile against the expected sub-branch in `## Active Work`. If they differ, surface the mismatch to the user before acting.
+
 Tier 2 — load on demand, not upfront:
 4. Before any architectural decision or significant design choice → read `architecture.md` in full
 5. Before any significant design choice → also read last 5 `log.md` entries
@@ -61,6 +63,7 @@ If rules exist and conflict with the action, stop and ask the user.
 
 | Trigger | What to write | Timing |
 |---|---|---|
+| About to run `git push` | Run `git branch --show-current` and compare to the expected sub-branch in `## Active Work`. If they differ, STOP and surface the mismatch before pushing. Also re-read `## Hard Rules`. | Before push executes |
 | `git commit` runs | Update `## State` + `## Active Work` in context.md | Before the next response |
 | Subagent (Agent tool) completes | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
 | Source file read revealed something non-obvious | One architecture.md bullet | Before the next tool call |
