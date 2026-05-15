@@ -91,6 +91,17 @@ These rules apply at all times — not just when `/brain` commands are invoked. 
 | A discrete task completed (bug fix, feature, investigation, refactor) | Before writing your final response: update `## State` + `## Active Work`, append a `log.md` entry. |
 | The user signals they are done ("thanks", "done", "good", "bye", "ship it", "looks good", "that's all", "close this") | Write log entry immediately without being asked, then confirm it is saved. |
 
+**Superpowers skill integration — non-negotiable:**
+
+| Trigger | Brain action | Timing |
+|---|---|---|
+| `brainstorming` skill invoked | Read context.md + last log entry before asking any questions (this IS Step 1 of brainstorming) | Before first clarifying question |
+| Approaching approach proposals in brainstorming | Read architecture.md in full — proposing approaches is an architectural decision (Tier 2) | Before Step 4 |
+| Design approved in brainstorming | Write approved decisions to `## Decisions` | Immediately |
+| `subagent-driven-development` skill invoked | Read context.md + architecture.md before first implementer dispatch | Before first Agent call |
+| Agent task completes during subagent-driven-development | Act on PostToolUse hook reminder — check architecture.md for new patterns, update Active Work if needed | Before next Agent dispatch |
+| All subagent tasks complete | Full vault sync: State + Active Work + log entry | Before finishing-a-development-branch |
+
 ### The key mental model
 
 Vault writes are not a separate chore after the task — they are the final step of every meaningful task. A session that ends without a log entry is incomplete.
@@ -125,7 +136,7 @@ A reusable sub-procedure. Run this whenever CLAUDE.md is read to identify the cu
 
 ### What to check
 
-After reading `CLAUDE.md` and extracting the slug, check whether the brain section (everything before the first `---` separator) contains the phrase `Branch reconciliation after resume`.
+After reading `CLAUDE.md` and extracting the slug, check whether the brain section (everything before the first `---` separator) contains `## Superpowers integration`.
 
 - If it does → brain section is current. Continue.
 - If it does not → brain section is outdated. Run the update below.
@@ -200,6 +211,20 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    - Add a new entry whenever a non-obvious pattern, convention, or structure is discovered.
    - Sections grow over time — never compress or delete, only add and correct.
    - Loaded on demand (Tier 2) — before architectural decisions, not at session start.
+
+   ## Superpowers integration
+
+   When superpowers skills run in this project, these checkpoints are non-negotiable:
+
+   **brainstorming skill** (hook fires on invocation):
+   - Before asking any clarifying questions → read context.md + last log entry. This IS Step 1 "Explore project context" — not a preliminary, the actual step.
+   - Before proposing approaches → read architecture.md in full (Tier 2 trigger: this is a design decision).
+   - When design is approved → write decisions to `## Decisions` immediately, before the spec is committed.
+
+   **subagent-driven-development skill** (hook fires on invocation):
+   - Before dispatching the first implementer → read context.md + architecture.md.
+   - After each subagent task completes (Agent PostToolUse hook reminder) → act on it before dispatching the next subagent. Continuous execution is not a reason to skip.
+   - After ALL tasks complete → full vault sync (State + Active Work + log entry) before finishing-a-development-branch.
    ```
 3. In the existing `CLAUDE.md`, replace everything from the first line up to and including the first `---` separator with the new brain section followed by `\n---\n`.
 4. Write the file back. Do not touch anything after the `---` separator.

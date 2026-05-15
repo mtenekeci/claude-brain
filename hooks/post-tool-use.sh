@@ -69,7 +69,7 @@ if [ "$TOOL_NAME" = "Agent" ]; then
     exit 0
 fi
 
-# ── Skill tool — detect superpowers skill completion ─────────────────────────
+# ── Skill tool — detect superpowers skill invocation ─────────────────────────
 
 if [ "$TOOL_NAME" = "Skill" ]; then
     SKILL_NAME=$(python3 -c "
@@ -82,8 +82,30 @@ except:
 " "$INPUT" 2>/dev/null) || true
 
     CONTEXT_PATH=""
-    [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH=" ($VAULT/projects/$SLUG/context.md)"
-    echo "Brain: skill '${SKILL_NAME}' completed inline. If this produced decisions, patterns, or completed work → update context.md${CONTEXT_PATH} State + Active Work before continuing."
+    ARCH_PATH=""
+    [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH="$VAULT/projects/$SLUG/context.md"
+    [ -n "$VAULT" ] && [ -n "$SLUG" ] && ARCH_PATH="$VAULT/projects/$SLUG/architecture.md"
+
+    case "$SKILL_NAME" in
+        *brainstorm*)
+            MSG="Brain: brainstorming loaded. BEFORE asking any questions, read context.md + last log entry as Step 1 'Explore project context'"
+            [ -n "$CONTEXT_PATH" ] && MSG="$MSG ($CONTEXT_PATH)"
+            MSG="${MSG}. Load architecture.md before proposing approaches (Tier 2 — this is an architectural decision). When design is approved, write decisions to ## Decisions immediately."
+            echo "$MSG"
+            ;;
+        *subagent-driven*)
+            MSG="Brain: subagent-driven-development loaded. Before dispatching the first implementer, read context.md + architecture.md"
+            [ -n "$CONTEXT_PATH" ] && MSG="$MSG ($CONTEXT_PATH, $ARCH_PATH)"
+            MSG="${MSG}. After ALL tasks complete, run a full vault sync (State + Active Work + log entry) before finishing-a-development-branch. PostToolUse reminders after each Agent call are non-negotiable — act on them."
+            echo "$MSG"
+            ;;
+        *)
+            MSG="Brain: skill '$SKILL_NAME' loaded"
+            [ -n "$CONTEXT_PATH" ] && MSG="${MSG}. If this session produces decisions, patterns, or completed work → update context.md ($CONTEXT_PATH) before the session ends."
+            [ -z "$CONTEXT_PATH" ] && MSG="${MSG}. If this session produces decisions, patterns, or completed work → update context.md before the session ends."
+            echo "$MSG"
+            ;;
+    esac
     exit 0
 fi
 

@@ -100,3 +100,17 @@ Writing to the vault is not a separate chore — it is the last step of every me
 - Add a new entry whenever a non-obvious pattern, convention, or structure is discovered.
 - Never compress or delete — only add and correct.
 - Loaded on demand (Tier 2) — before architectural decisions, not at session start. Keeps session start lean.
+
+## Superpowers integration
+
+When superpowers skills run in this project, these checkpoints are non-negotiable:
+
+**brainstorming skill** (hook fires on invocation):
+- Before asking any clarifying questions → read context.md + last log entry. This IS Step 1 "Explore project context" — not a preliminary, the actual step.
+- Before proposing approaches → read architecture.md in full (Tier 2 trigger: this is a design decision).
+- When design is approved → write decisions to `## Decisions` immediately, before the spec is committed.
+
+**subagent-driven-development skill** (hook fires on invocation):
+- Before dispatching the first implementer → read context.md + architecture.md.
+- After each subagent task completes (Agent PostToolUse hook reminder) → act on it before dispatching the next subagent. Continuous execution is not a reason to skip.
+- After ALL tasks complete → full vault sync (State + Active Work + log entry) before finishing-a-development-branch.
