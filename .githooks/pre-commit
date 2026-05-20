@@ -1,0 +1,7 @@
+#!/bin/sh
+branch=$(git branch --show-current)
+if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
+  echo "❌ Direct commits to $branch are not allowed."
+  echo "   Create a feature branch: git checkout -b feat/<name>"
+  exit 1
+fi
