@@ -250,6 +250,16 @@ chmod +x ~/.claude/brain-session-start.sh ~/.claude/brain-precompact.sh ~/.claud
 
 If `~/.claude/plugins/claude-brain/hooks/` does not exist, skip this step silently — hooks are managed externally.
 
+### Step 1.5 — Configure git hooks path if needed
+
+If a `.githooks/` directory exists in the current project root:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This activates committed git hooks (e.g. the pre-commit guard that blocks direct commits to `main`). Skip silently if `.githooks/` does not exist.
+
 ### Step 2 — Skip permission checks
 
 All permissions (vault-level and project-level) are set once during `/brain init`. They do not need to be checked or repaired on every health check run. If permissions are missing, the user will be prompted when the operation that needs them runs — at which point they can approve or re-run `/brain init`.
@@ -761,6 +771,16 @@ Add to the same `<current working directory>/.claude/settings.json` used for Pre
 
 Apply the same rules as PreCompact: add under `hooks` key, skip if already present.
 
+### If code project and `.githooks/` present: configure git hooks path
+
+If a `.githooks/` directory exists in the project root:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This activates committed git hooks (e.g. branch protection). Skip silently if `.githooks/` does not exist.
+
 ### Confirm
 
 Print:
@@ -776,6 +796,7 @@ If code project, also print:
 ```
 CLAUDE.md:      <current working directory>/CLAUDE.md
 Hooks:          PostToolUse + SessionStart + PreCompact + SessionEnd hooks added to .claude/settings.json
+Git hooks:      core.hooksPath set to .githooks (if .githooks/ present)
 Permissions:    Vault read/write granted in ~/.claude/settings.json
 
 Every future session in this folder will auto-load vault context.
