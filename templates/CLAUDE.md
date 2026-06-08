@@ -114,3 +114,10 @@ When superpowers skills run in this project, these checkpoints are non-negotiabl
 - Before dispatching the first implementer → read context.md + architecture.md.
 - After each subagent task completes (Agent PostToolUse hook reminder) → act on it before dispatching the next subagent. Continuous execution is not a reason to skip.
 - After ALL tasks complete → full vault sync (State + Active Work + log entry) before finishing-a-development-branch.
+
+## Briefing subagents on the vault
+
+A dispatched subagent (Agent tool) starts cold — no `SessionStart` hook fires for it, so it has never seen `context.md` or `architecture.md` unless you put that in front of it. Every implementer/researcher prompt you write MUST:
+1. **Name the vault path** (`<vault>/projects/<slug>/`) and instruct the subagent to read `context.md` — and `architecture.md` too, if the task involves non-trivial design or touches existing patterns — before starting work.
+2. **Inline the sharp edges directly** — any Hard Rule or Architecture fact specific to that subagent's slice of work goes in the prompt text itself, verbatim. Don't gamble on the subagent finding it.
+3. **Ask it to report back** any new pattern, convention, or decision it discovered, in its final message. The subagent does not write to the vault — you do, once it returns. This keeps vault writes single-owner and avoids concurrent-write races across parallel subagents.

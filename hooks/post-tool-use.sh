@@ -96,7 +96,7 @@ except:
         *subagent-driven*)
             MSG="Brain: subagent-driven-development loaded. Before dispatching the first implementer, read context.md + architecture.md"
             [ -n "$CONTEXT_PATH" ] && MSG="$MSG ($CONTEXT_PATH, $ARCH_PATH)"
-            MSG="${MSG}. After ALL tasks complete, run a full vault sync (State + Active Work + log entry) before finishing-a-development-branch. PostToolUse reminders after each Agent call are non-negotiable — act on them."
+            MSG="${MSG}. Each implementer starts cold — no SessionStart hook fires for it. Brief it: name the vault path, tell it to read context.md/architecture.md, inline any Hard Rules or Architecture facts specific to its task, and have it report new patterns/decisions back to you in its final message (it should not write to the vault itself). After ALL tasks complete, run a full vault sync (State + Active Work + log entry) before finishing-a-development-branch. PostToolUse reminders after each Agent call are non-negotiable — act on them."
             echo "$MSG"
             ;;
         *)

@@ -99,8 +99,16 @@ These rules apply at all times — not just when `/brain` commands are invoked. 
 | Approaching approach proposals in brainstorming | Read architecture.md in full — proposing approaches is an architectural decision (Tier 2) | Before Step 4 |
 | Design approved in brainstorming | Write approved decisions to `## Decisions` | Immediately |
 | `subagent-driven-development` skill invoked | Read context.md + architecture.md before first implementer dispatch | Before first Agent call |
+| Dispatching any subagent (Agent tool) | Brief it on the vault — see "Briefing subagents on the vault" below. It starts cold; no SessionStart hook fires for it. | In the dispatch prompt itself |
 | Agent task completes during subagent-driven-development | Act on PostToolUse hook reminder — check architecture.md for new patterns, update Active Work if needed | Before next Agent dispatch |
 | All subagent tasks complete | Full vault sync: State + Active Work + log entry | Before finishing-a-development-branch |
+
+**Briefing subagents on the vault — non-negotiable for every dispatch:**
+
+A subagent has no `SessionStart` hook — it never sees `context.md`/`architecture.md` unless the dispatch prompt puts it there. Every `Agent` tool call you make MUST:
+1. Name the vault path (`<VAULT_ROOT>/projects/<slug>/`) and tell the subagent to read `context.md` (+ `architecture.md` for design/implementation tasks) before starting.
+2. Inline any Hard Rule or Architecture fact specific to that subagent's slice of work directly into the prompt text — don't rely on it finding the file.
+3. Ask it to report new patterns/decisions back in its final message. The subagent does not write to the vault; you do, once it returns — single-owner writes avoid races across parallel subagents.
 
 ### The key mental model
 
@@ -136,7 +144,7 @@ A reusable sub-procedure. Run this whenever CLAUDE.md is read to identify the cu
 
 ### What to check
 
-After reading `CLAUDE.md` and extracting the slug, check whether the brain section (everything before the first `---` separator) contains `## Superpowers integration`.
+After reading `CLAUDE.md` and extracting the slug, check whether the brain section (everything before the first `---` separator) contains both `## Superpowers integration` and `## Briefing subagents on the vault`.
 
 - If it does → brain section is current. Continue.
 - If it does not → brain section is outdated. Run the update below.
@@ -225,6 +233,13 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    - Before dispatching the first implementer → read context.md + architecture.md.
    - After each subagent task completes (Agent PostToolUse hook reminder) → act on it before dispatching the next subagent. Continuous execution is not a reason to skip.
    - After ALL tasks complete → full vault sync (State + Active Work + log entry) before finishing-a-development-branch.
+
+   ## Briefing subagents on the vault
+
+   A dispatched subagent (Agent tool) starts cold — no `SessionStart` hook fires for it, so it has never seen `context.md` or `architecture.md` unless you put that in front of it. Every implementer/researcher prompt you write MUST:
+   1. **Name the vault path** (`<vault>/projects/<slug>/`) and instruct the subagent to read `context.md` — and `architecture.md` too, if the task involves non-trivial design or touches existing patterns — before starting work.
+   2. **Inline the sharp edges directly** — any Hard Rule or Architecture fact specific to that subagent's slice of work goes in the prompt text itself, verbatim. Don't gamble on the subagent finding it.
+   3. **Ask it to report back** any new pattern, convention, or decision it discovered, in its final message. The subagent does not write to the vault — you do, once it returns. This keeps vault writes single-owner and avoids concurrent-write races across parallel subagents.
    ```
 3. In the existing `CLAUDE.md`, replace everything from the first line up to and including the first `---` separator with the new brain section followed by `\n---\n`.
 4. Write the file back. Do not touch anything after the `---` separator.
