@@ -6,7 +6,8 @@ Claude's Obsidian second brain — persistent, project-isolated context across s
 
 - `/brain init` — run once in a project folder. Creates a vault entry and writes a `CLAUDE.md` that auto-loads context every session.
 - Every new session: Claude reads `context.md` + the last session log (~160 lines total) automatically.
-- During work: Claude updates the vault proactively — after completing a task, when a decision is made, when architectural facts are discovered, or after reading several source files. No prompting needed.
+- During work: Claude updates the vault proactively — immediately after a `git commit`, when a subagent finishes, when a decision is made, when architectural facts are discovered, or after completing a task. No prompting needed.
+- Before `git push`, Claude checks the current branch against what's recorded in `## Active Work` and flags any mismatch before pushing — and re-checks `## Hard Rules` so risky actions don't slip through.
 - You never tell Claude to load or save context — it manages itself.
 
 ## Requirements
@@ -126,9 +127,9 @@ Keeps all vault history intact. Removes only the `CLAUDE.md` brain section and a
 
 | Scenario | Lines loaded |
 |----------|-------------|
-| Session start (Tier 1) | ~260–360 (context.md + architecture.md + last log entry) |
-| Before significant design choice (Tier 2) | +40 lines (last 5 log entries) |
-| Deep history trace (Tier 3) | +200–400 lines (full log) |
+| Session start (Tier 1) | ~160 (context.md + last log entry) |
+| Before an architectural decision (Tier 2) | + `architecture.md` in full + last 5 `log.md` entries |
+| Deep history trace (Tier 3) | + full `log.md` |
 | Re-discovering from scratch | 2,000–10,000+ |
 
 ## License
