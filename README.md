@@ -7,6 +7,7 @@ Claude's Obsidian second brain — persistent, project-isolated context across s
 - `/brain init` — run once in a project folder. Creates a vault entry and writes a `CLAUDE.md` that auto-loads context every session.
 - Every new session: Claude reads `context.md` + the last session log (~160 lines total) automatically.
 - During work: Claude updates the vault proactively — immediately after a `git commit`, when a subagent finishes, when a decision is made, when architectural facts are discovered, or after completing a task. No prompting needed.
+- When a discovered fact is reusable beyond one place — a library, a named subsystem, an infra component, a decision with lasting reach — Claude also creates or links an atomic note in `concepts/`. These become shared hub nodes in Obsidian's graph view, growing a mindmap across projects organically, in proportion to actual reuse.
 - Before `git push`, Claude checks the current branch against what's recorded in `## Active Work` and flags any mismatch before pushing — and re-checks `## Hard Rules` so risky actions don't slip through.
 - You never tell Claude to load or save context — it manages itself.
 
@@ -116,6 +117,8 @@ Keeps all vault history intact. Removes only the `CLAUDE.md` brain section and a
 ├── _system/
 │   ├── BRAIN.md              ← vault operating instructions
 │   └── project-index.md      ← registry of all projects
+├── concepts/
+│   └── <slug>.md             ← atomic notes for shared libraries, subsystems, infra, decisions
 └── projects/
     └── <slug>/
         ├── context.md        ← state, active work, decisions (≤150 lines)

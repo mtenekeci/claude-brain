@@ -27,6 +27,7 @@ VAULT_ROOT     = <vault field from config>
 PLUGIN_DIR     = ~/.claude/plugins/claude-brain
 VAULT_SYSTEM   = <VAULT_ROOT>/_system
 VAULT_PROJECTS = <VAULT_ROOT>/projects
+VAULT_CONCEPTS = <VAULT_ROOT>/concepts
 ```
 
 ---
@@ -42,13 +43,14 @@ Always use Obsidian wikilinks when referencing other vault files. This builds th
 | Reference to a project's log | `[[projects/<slug>/log\|<slug> log]]` |
 | Reference to project index | `[[_system/project-index\|Project Index]]` |
 | Cross-project reference in context.md | `[[projects/<other-slug>/context\|<other-slug>]]` |
+| Reference to a concept note | `[[concepts/<concept-slug>\|<Concept Name>]]` |
 
 **When to add links:**
 - `context.md` — link any mentioned related projects using `[[projects/<slug>/context\|<slug>]]`; link to architecture.md at the bottom of `## Architecture` section
-- `architecture.md` — link back to context.md in the breadcrumb; link to related projects if relevant
+- `architecture.md` — link back to context.md in the breadcrumb; link to related projects if relevant; link to a concept note when the Concept graph promotion rule applies (see below)
 - `log.md` — link to `context.md` at the top (already in template)
 - `project-index.md` — every slug cell is a wikilink (handled in `/brain init` and `/brain sync`)
-- Decisions section — if a decision relates to another project, link it
+- Decisions section — if a decision relates to another project, link it; if it's a `decision`-type concept (reach beyond this project), link its concept note too
 
 **Never use plain text** where a wikilink could go. Every connection you write becomes an edge in the Obsidian graph.
 
@@ -66,6 +68,44 @@ This runs only on writes, never on session-start reads — zero token cost at lo
 
 ---
 
+## Concept graph (mindmap)
+
+`VAULT_CONCEPTS` (`<VAULT_ROOT>/concepts/`) holds atomic notes for reusable architectural entities. Unlike `context.md`/`architecture.md` — one prose-heavy set per project — each concept note is small and addressable, and becomes a hub node in Obsidian's graph view, including hubs shared across multiple projects (e.g. a library two projects both depend on).
+
+### Taxonomy
+
+Only these four types get a concept note. Anything else stays an `architecture.md` bullet.
+
+| Type | What it covers | Examples |
+|---|---|---|
+| `library` | An external dependency | Zustand, Stripe SDK, Redis client |
+| `subsystem` | A named, composed piece of one project's architecture | "auth flow", "sync engine", "event bus" |
+| `infra` | Infrastructure / deployment components | Postgres, CI pipeline, hosting platform |
+| `decision` | A decision with reach beyond the project that made it | "all services share one Postgres instance" |
+
+### Promotion rule
+
+Apply this during the existing "non-obvious discovery → architecture.md bullet" trigger in the Autonomous write protocol below. It is not a separate pass, not a sync-time step, and not proactive graph-building.
+
+When a discovery would normally become an `architecture.md` bullet, also ask: **would I plausibly write "see `[[X]]`" from more than one place** (another file, another decision, or another project)?
+
+- **No** → `architecture.md` bullet only, as before. Most discoveries end here — this is the common case.
+- **Yes** → it's a concept node:
+  1. Derive `CONCEPT_SLUG`: lowercase, hyphenated form of the concept's name (e.g. "Zustand" → `zustand`, "Sync Engine" → `sync-engine`).
+  2. Check whether `<VAULT_CONCEPTS>/<CONCEPT_SLUG>.md` already exists — this check is how cross-project and cross-file sharing happens. Never create a second note for the same entity.
+     - Doesn't exist → create it from `templates/concept.md`: fill `type` (one of the four above), a 1-3 sentence description, and `## Used by` starting with this project.
+     - Exists → append a line to `## Used by` for this project/context (with a one-line note on how *this* context uses it). Do not rewrite other projects' existing lines.
+  3. Reference it from the `architecture.md` bullet (or the `## Decisions` entry, for `decision`-type concepts): `... — see [[concepts/<CONCEPT_SLUG>|<Concept Name>]]`.
+
+This is the only new write triggered by this feature — no separate sync pass, no new hook. The concept graph grows exactly in proportion to actual reuse.
+
+### Concepts directory housekeeping
+
+- `<VAULT_CONCEPTS>/` is created during `/brain init` (vault initialization) and self-healed by the Hook health check for vaults created before this feature existed.
+- Concept notes are never deleted automatically. If a concept becomes unused (all `## Used by` entries removed), leave the note — it's cheap and may be reused later.
+
+---
+
 ## Autonomous write protocol
 
 These rules apply at all times — not just when `/brain` commands are invoked. They govern when Claude writes to the vault without being explicitly asked.
@@ -79,7 +119,7 @@ These rules apply at all times — not just when `/brain` commands are invoked. 
 | About to run `git push` | Run `git branch --show-current` and compare to the expected sub-branch named in `## Active Work`. If they differ, STOP — surface the mismatch to the user before pushing. Also re-read `## Hard Rules` to confirm nothing is being violated. | Before push executes |
 | `git commit` runs (detected by PostToolUse hook on Bash tool) | Update `## State` + `## Active Work` in context.md | Before the next response |
 | Subagent (Agent tool) completes (detected by PostToolUse hook) | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
-| You read a source file and discovered a non-obvious fact | Add to `architecture.md` before your next tool call. If `architecture.md` doesn't exist yet, add to `context.md ## Architecture` and create `architecture.md` at the next sync. | Before the next tool call |
+| You read a source file and discovered a non-obvious fact | Add to `architecture.md` before your next tool call (if `architecture.md` doesn't exist yet, add to `context.md ## Architecture` and create `architecture.md` at the next sync). Also apply the Concept graph promotion rule — if it's a library/subsystem/infra/decision someone would plausibly link to from elsewhere, create/update its note in `VAULT_CONCEPTS` and link it from the bullet. | Before the next tool call |
 | A decision was made or confirmed | Add to `context.md ## Decisions` immediately. Do not wait for sync. | Immediately |
 | An open question was resolved | Remove it from `context.md ## Open Questions` immediately. | Immediately |
 
@@ -144,7 +184,7 @@ A reusable sub-procedure. Run this whenever CLAUDE.md is read to identify the cu
 
 ### What to check
 
-After reading `CLAUDE.md` and extracting the slug, check whether the brain section (everything before the first `---` separator) contains both `## Superpowers integration` and `## Briefing subagents on the vault`.
+After reading `CLAUDE.md` and extracting the slug, check whether the brain section (everything before the first `---` separator) contains `## Superpowers integration`, `## Briefing subagents on the vault`, and `## Concept graph`.
 
 - If it does → brain section is current. Continue.
 - If it does not → brain section is outdated. Run the update below.
@@ -187,7 +227,7 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    | `git commit` runs | Update `## State` + `## Active Work` in context.md | Before the next response |
    | About to run `git push` | Run `git branch --show-current` and compare to the expected sub-branch named in `## Active Work`. If they differ, STOP and surface the mismatch before pushing. Also re-read `## Hard Rules`. | Before push executes |
    | Subagent (Agent tool) completes | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
-   | Source file read revealed something non-obvious | One architecture.md bullet | Before the next tool call |
+   | Source file read revealed something non-obvious | One architecture.md bullet. If it's a library/subsystem/infra/decision someone would plausibly link to from elsewhere ("see [[X]]" from >1 place), also create/update its note in `<vault-root>/concepts/` (see ## Concept graph) and link it from the bullet. | Before the next tool call |
    | Decision made | Add to `## Decisions` | Immediately |
    | Open question resolved | Remove from `## Open Questions` | Immediately |
 
@@ -219,6 +259,22 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    - Add a new entry whenever a non-obvious pattern, convention, or structure is discovered.
    - Sections grow over time — never compress or delete, only add and correct.
    - Loaded on demand (Tier 2) — before architectural decisions, not at session start.
+   - Bullets that reference a shared library, subsystem, infra component, or cross-reaching decision should link to its concept note: `— see [[concepts/<slug>|<Name>]]` (see ## Concept graph).
+
+   ## Concept graph
+
+   `<vault-root>/concepts/` holds atomic notes for reusable architectural entities — libraries, named subsystems, infra components, and decisions with reach beyond this project. These become hub nodes in Obsidian's graph view, including hubs shared across multiple projects.
+
+   **Taxonomy** — only these four types get a concept note: `library`, `subsystem` (a named, composed piece of the architecture, e.g. "auth flow"), `infra`, `decision` (with reach beyond this project). Anything else stays an architecture.md bullet.
+
+   **Promotion rule** — applied at the same moment as the existing "non-obvious discovery → architecture.md bullet" trigger, not as a separate pass. Ask: would I plausibly write "see `[[X]]`" from more than one place (another file, decision, or project)?
+   - No → architecture.md bullet only, as before.
+   - Yes → derive `CONCEPT_SLUG` (lowercase, hyphenated name), then check `<vault-root>/concepts/<CONCEPT_SLUG>.md`:
+     - Doesn't exist → create it from `templates/concept.md` with `type`, a 1-3 sentence description, and `## Used by` starting with this project.
+     - Exists → append this project to `## Used by` (don't rewrite other entries — this is how cross-project sharing works).
+     - Link it from the architecture.md bullet (or `## Decisions` entry): `— see [[concepts/<CONCEPT_SLUG>|<Concept Name>]]`.
+
+   Concept notes are never deleted automatically.
 
    ## Superpowers integration
 
@@ -279,7 +335,7 @@ This activates committed git hooks (e.g. the pre-commit guard that blocks direct
 
 All permissions (vault-level and project-level) are set once during `/brain init`. They do not need to be checked or repaired on every health check run. If permissions are missing, the user will be prompted when the operation that needs them runs — at which point they can approve or re-run `/brain init`.
 
-### Step 3 — Ensure `architecture.md` and `## Hard Rules` exist
+### Step 3 — Ensure `architecture.md`, `## Hard Rules`, and `concepts/` exist
 
 **Part A: architecture.md**
 
@@ -299,6 +355,12 @@ If it does NOT exist (old project initialized before Hard Rules was added):
 1. Read `context.md`.
 2. Insert a new `## Hard Rules` section immediately before `## Constraints`, with placeholder text: `None documented yet.`
 3. Write `context.md` back.
+
+**Part C: concepts/ directory**
+
+Check if `<VAULT_CONCEPTS>` (`<VAULT_ROOT>/concepts/`) exists.
+
+If it does NOT exist (vault created before the concept graph feature): create it with `mkdir -p <VAULT_CONCEPTS>`. No file population needed — it starts empty and grows via the Concept graph promotion rule.
 
 ### Step 4 — Ensure all 4 hooks are registered in `.claude/settings.json`
 
@@ -447,6 +509,8 @@ If it does NOT exist:
    | project | type | path | last-active |
    |---------|------|------|-------------|
    ```
+
+Regardless of whether `_system/` already existed, ensure `<VAULT_ROOT>/concepts/` exists (`mkdir -p` — see ## Concept graph; starts empty, grows via the promotion rule). This covers vaults configured before v1.5.0.
 
 ### Check for duplicate slug
 
