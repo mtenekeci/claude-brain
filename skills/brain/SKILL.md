@@ -500,16 +500,17 @@ Check if `<VAULT_ROOT>/_system/` exists.
 If it does NOT exist:
 1. Create directory `<VAULT_ROOT>/_system/`
 2. Create directory `<VAULT_ROOT>/projects/`
-3. Create directory `<VAULT_ROOT>/concepts/` (see ## Concept graph — starts empty, grows via the promotion rule)
-4. Read `~/.claude/plugins/claude-brain/templates/BRAIN.md` verbatim.
+3. Read `~/.claude/plugins/claude-brain/templates/BRAIN.md` verbatim.
    Write it to `<VAULT_ROOT>/_system/BRAIN.md`.
-5. Write `<VAULT_ROOT>/_system/project-index.md`:
+4. Write `<VAULT_ROOT>/_system/project-index.md`:
    ```markdown
    # Project Index
 
    | project | type | path | last-active |
    |---------|------|------|-------------|
    ```
+
+Regardless of whether `_system/` already existed, ensure `<VAULT_ROOT>/concepts/` exists (`mkdir -p` — see ## Concept graph; starts empty, grows via the promotion rule). This covers vaults configured before v1.5.0.
 
 ### Check for duplicate slug
 

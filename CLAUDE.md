@@ -31,7 +31,7 @@ Never answer from memory when the vault has the authoritative record.
 | `git commit` runs | Update `## State` + `## Active Work` in context.md | Before the next response |
 | About to run `git push` | Run `git branch --show-current` and compare to the expected sub-branch named in `## Active Work`. If they differ, STOP and surface the mismatch before pushing. Also re-read `## Hard Rules`. | Before push executes |
 | Subagent (Agent tool) completes | If new patterns found → architecture.md bullet; if feature complete → full context.md update | Before the next response |
-| Source file read revealed something non-obvious | One architecture.md bullet | Before the next tool call |
+| Source file read revealed something non-obvious | One architecture.md bullet. If it's a library/subsystem/infra/decision someone would plausibly link to from elsewhere ("see [[X]]" from >1 place), also create/update its note in `<vault-root>/concepts/` (see ## Concept graph) and link it from the bullet. | Before the next tool call |
 | Decision made | Add to `## Decisions` | Immediately |
 | Open question resolved | Remove from `## Open Questions` | Immediately |
 
@@ -63,6 +63,22 @@ Writing to the vault is not a separate chore — it is the last step of every me
 - Add a new entry whenever a non-obvious pattern, convention, or structure is discovered.
 - Sections grow over time — never compress or delete, only add and correct.
 - Loaded on demand (Tier 2) — before architectural decisions, not at session start.
+- Bullets that reference a shared library, subsystem, infra component, or cross-reaching decision should link to its concept note: `— see [[concepts/<slug>|<Name>]]` (see ## Concept graph).
+
+## Concept graph
+
+`<vault-root>/concepts/` holds atomic notes for reusable architectural entities — libraries, named subsystems, infra components, and decisions with reach beyond this project. These become hub nodes in Obsidian's graph view, including hubs shared across multiple projects.
+
+**Taxonomy** — only these four types get a concept note: `library`, `subsystem` (a named, composed piece of the architecture, e.g. "auth flow"), `infra`, `decision` (with reach beyond this project). Anything else stays an architecture.md bullet.
+
+**Promotion rule** — applied at the same moment as the existing "non-obvious discovery → architecture.md bullet" trigger, not as a separate pass. Ask: would I plausibly write "see `[[X]]`" from more than one place (another file, decision, or project)?
+- No → architecture.md bullet only, as before.
+- Yes → derive `CONCEPT_SLUG` (lowercase, hyphenated name), then check `<vault-root>/concepts/<CONCEPT_SLUG>.md`:
+  - Doesn't exist → create it from `templates/concept.md` with `type`, a 1-3 sentence description, and `## Used by` starting with this project.
+  - Exists → append this project to `## Used by` (don't rewrite other entries — this is how cross-project sharing works).
+  - Link it from the architecture.md bullet (or `## Decisions` entry): `— see [[concepts/<CONCEPT_SLUG>|<Concept Name>]]`.
+
+Concept notes are never deleted automatically.
 
 ## Superpowers integration
 
