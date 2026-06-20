@@ -93,7 +93,21 @@ When a discovery would normally become an `architecture.md` bullet, also ask: **
 - **Yes** → it's a concept node:
   1. Derive `CONCEPT_SLUG`: lowercase, hyphenated form of the concept's name (e.g. "Zustand" → `zustand`, "Sync Engine" → `sync-engine`).
   2. Check whether `<VAULT_CONCEPTS>/<CONCEPT_SLUG>.md` already exists — this check is how cross-project and cross-file sharing happens. Never create a second note for the same entity.
-     - Doesn't exist → create it at `<VAULT_CONCEPTS>/<CONCEPT_SLUG>.md` using the template at `<PLUGIN_DIR>/templates/concept.md` (i.e. `~/.claude/plugins/claude-brain/templates/concept.md`). Fill in: `concept` (the display name), `type` (one of the four above), `updated` (today's date), a 1-3 sentence description body, and a `## Used by` entry for this project.
+     - Doesn't exist → create `<VAULT_CONCEPTS>/<CONCEPT_SLUG>.md` with this exact structure (fill in the bracketed fields):
+       ```markdown
+       ---
+       concept: {Concept Name}
+       type: {library|subsystem|infra|decision}
+       updated: {YYYY-MM-DD}
+       ---
+
+       # {Concept Name}
+
+       {1-3 sentence description — what it is, and why it matters to the projects below}
+
+       ## Used by
+       - [[projects/{slug}/context|{slug}]] — {one-line note on how this project uses it}
+       ```
      - Exists → append a line to `## Used by` for this project/context (with a one-line note on how *this* context uses it). Do not rewrite other projects' existing lines.
   3. Reference it from the `architecture.md` bullet (or the `## Decisions` entry, for `decision`-type concepts): `... — see [[concepts/<CONCEPT_SLUG>|<Concept Name>]]`.
 
@@ -270,7 +284,21 @@ After reading `CLAUDE.md` and extracting the slug, check whether the brain secti
    **Promotion rule** — applied at the same moment as the existing "non-obvious discovery → architecture.md bullet" trigger, not as a separate pass. Ask: would I plausibly write "see `[[X]]`" from more than one place (another file, decision, or project)?
    - No → architecture.md bullet only, as before.
    - Yes → derive `CONCEPT_SLUG` (lowercase, hyphenated name), then check `<vault-root>/concepts/<CONCEPT_SLUG>.md`:
-     - Doesn't exist → create it at `<vault-root>/concepts/<CONCEPT_SLUG>.md` using the structure from `~/.claude/plugins/claude-brain/templates/concept.md`. Fill in: `concept` (display name), `type`, `updated` (today), a 1-3 sentence description, and a `## Used by` entry for this project.
+     - Doesn't exist → create `<vault-root>/concepts/<CONCEPT_SLUG>.md` with this structure:
+       ```
+       ---
+       concept: {Concept Name}
+       type: {library|subsystem|infra|decision}
+       updated: {YYYY-MM-DD}
+       ---
+
+       # {Concept Name}
+
+       {1-3 sentence description}
+
+       ## Used by
+       - [[projects/{slug}/context|{slug}]] — {one-line note}
+       ```
      - Exists → append this project to `## Used by` (don't rewrite other entries — this is how cross-project sharing works).
      - Link it from the architecture.md bullet (or `## Decisions` entry): `— see [[concepts/<CONCEPT_SLUG>|<Concept Name>]]`.
 
