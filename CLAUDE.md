@@ -74,7 +74,7 @@ Writing to the vault is not a separate chore — it is the last step of every me
 **Promotion rule** — applied at the same moment as the existing "non-obvious discovery → architecture.md bullet" trigger, not as a separate pass. Ask: would I plausibly write "see `[[X]]`" from more than one place (another file, decision, or project)?
 - No → architecture.md bullet only, as before.
 - Yes → derive `CONCEPT_SLUG` (lowercase, hyphenated name), then check `<vault-root>/concepts/<CONCEPT_SLUG>.md`:
-  - Doesn't exist → create it from `templates/concept.md` with `type`, a 1-3 sentence description, and `## Used by` starting with this project.
+  - Doesn't exist → create `<vault-root>/concepts/<CONCEPT_SLUG>.md` with frontmatter (`concept`, `type`, `updated`), a 1-3 sentence description body, and a `## Used by` entry linking this project. See existing notes in `<vault-root>/concepts/` for the exact format.
   - Exists → append this project to `## Used by` (don't rewrite other entries — this is how cross-project sharing works).
   - Link it from the architecture.md bullet (or `## Decisions` entry): `— see [[concepts/<CONCEPT_SLUG>|<Concept Name>]]`.
 
