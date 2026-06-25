@@ -636,7 +636,7 @@ If the derived slug already appears in the table as a row value, stop and say:
    **Step F — Read Claude's memory for this project**
 
    Compute the memory path: take the absolute current working directory, remove the leading `/`, replace all remaining `/` with `-`.
-   Example: `/Users/mehmet/Projects/my-app` → `Users-mehmet-Projects-my-app`
+   Example: `/Users/alex/Projects/my-app` → `Users-alex-Projects-my-app`
    Memory path: `~/.claude/projects/<encoded-path>/memory/`
 
    ```bash
