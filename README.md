@@ -1,140 +1,124 @@
 # claude-brain
 
-Claude's Obsidian second brain — persistent, project-isolated context across sessions with autonomous read/write. Zero token overhead compared to re-discovery.
+`claude-brain` is a Claude Code plugin that gives Claude a persistent Obsidian-backed second brain for project context, decisions, architecture notes, and session logs.
 
-## How it works
+It is designed for long-running projects where each new Claude session should start with the same compact, authoritative context instead of rediscovering the repository from scratch.
 
-- `/brain init` — run once in a project folder. Creates a vault entry and writes a `CLAUDE.md` that auto-loads context every session.
-- Every new session: Claude reads `context.md` + the last session log (~160 lines total) automatically.
-- During work: Claude updates the vault proactively — immediately after a `git commit`, when a subagent finishes, when a decision is made, when architectural facts are discovered, or after completing a task. No prompting needed.
-- When a discovered fact is reusable beyond one place — a library, a named subsystem, an infra component, a decision with lasting reach — Claude also creates or links an atomic note in `concepts/`. These become shared hub nodes in Obsidian's graph view, growing a mindmap across projects organically, in proportion to actual reuse.
-- Before `git push`, Claude checks the current branch against what's recorded in `## Active Work` and flags any mismatch before pushing — and re-checks `## Hard Rules` so risky actions don't slip through.
-- You never tell Claude to load or save context — it manages itself.
+## What it does
+
+- Adds a `/brain` command to Claude Code.
+- Creates one vault entry per project under an Obsidian vault.
+- Auto-loads `context.md` and the latest session log at the start of each session.
+- Prompts Claude to update the vault when decisions, architecture facts, commits, compactions, or session ends happen.
+- Keeps detailed architecture notes in `architecture.md` and append-only history in `log.md`.
+- Maintains optional atomic concept notes in `concepts/` so reusable ideas become graph nodes in Obsidian.
+- Installs project hooks that self-heal when `/brain sync` or `/brain status` runs.
 
 ## Requirements
 
-- [Claude Code](https://claude.ai/code) CLI installed
-- [Obsidian](https://obsidian.md) (vault can be anywhere — auto-discovered on first run)
+- [Claude Code](https://claude.ai/code)
+- [Obsidian](https://obsidian.md), or any folder you want to use as a markdown vault
+- macOS, Linux, or another shell environment with `bash`, `python3`, and `git`
 
 ## Install
 
-In any Claude Code session:
+Add the marketplace and install the plugin from inside Claude Code:
 
-```
+```text
 /plugin marketplace add mtenekeci/claude-brain
 /plugin install brain@claude-brain
 ```
 
-The `/brain` command is now available in every session on this machine.
+After installation, `/brain` is available in Claude Code sessions on the machine.
 
-## Vault setup
+## Quick start
 
-1. Open Obsidian and create a vault anywhere you like
-2. Run `/brain init` — on first run it **auto-discovers** Obsidian vaults in common locations:
-   - If one vault found → asks you to confirm it
-   - If multiple found → lets you pick from a list
-   - If none found → asks for the path (default: `~/Documents/claude-brain`)
-3. The `_system/` structure is created automatically inside your chosen vault
+From a code project:
 
-The vault path is saved to `~/.claude/brain.config` and reused for all future commands. To change it later:
-
-```
-/brain config set /path/to/your/vault
-```
-
-To check the current config:
-
-```
-/brain config
-```
-
-## Usage
-
-### Initialize a code project
-
-```
+```bash
 cd ~/Projects/my-app
 claude
 /brain init
 ```
 
-Claude asks for the project name and type, then:
-- Creates `~/Documents/claude-brain/projects/my-app/`
-- Writes `CLAUDE.md` to `~/Projects/my-app/`
-- Installs 4 hooks in `.claude/settings.json`: `SessionStart`, `PostToolUse`, `PreCompact`, `SessionEnd`
-- Grants vault read/write/edit permissions in `~/.claude/settings.json`
+`/brain init` asks for the project name and type, then:
 
-Every future session in `~/Projects/my-app/` auto-loads vault context without permission prompts.
+- Creates a project folder in your configured vault.
+- Writes the project brain section into the project's `CLAUDE.md`.
+- Installs Claude Code hooks in `.claude/settings.json`.
+- Grants Claude Code the vault permissions needed for reads and writes.
 
-### Initialize a topic project (no code folder)
+Every future Claude Code session in that project loads the vault context automatically.
 
-Run `/brain init` from any directory and choose `topic` when asked. To load context later:
+## Commands
 
-```
-/brain load auth-redesign
-```
+| Command | Purpose |
+|---|---|
+| `/brain init` | Connect the current project or topic to the vault. |
+| `/brain load <slug>` | Load an existing topic or project context manually. |
+| `/brain sync` | Force a vault write and refresh installed brain assets. |
+| `/brain status` | Show configuration, hook health, vault paths, and sync status. |
+| `/brain config` | Show the configured vault path. |
+| `/brain config set <path>` | Change the vault path. |
+| `/brain remove <slug>` | Delete a project from the vault after confirmation. |
+| `/brain disconnect <slug>` | Remove hooks and project integration without deleting vault history. |
 
-### Check current brain state
+## Vault layout
 
-```
-/brain status
-```
-
-### Force a vault write
-
-```
-/brain sync
-```
-
-Both `/brain sync` and `/brain status` also self-heal the project automatically: they update the `CLAUDE.md` brain section and hook scripts to the latest version if outdated, and repair any missing vault permissions.
-
-### Remove a project from the vault
-
-Permanently deletes vault files and removes the project from the index. Also cleans up `CLAUDE.md` and hooks from the project folder if reachable. Requires typing the slug to confirm.
-
-```
-/brain remove my-app
-```
-
-### Disconnect a project without deleting history
-
-Keeps all vault history intact. Removes only the `CLAUDE.md` brain section and all 4 hooks from the project folder — stops auto-loading without losing notes.
-
-```
-/brain disconnect my-app
-```
-
-### Change vault location
-
-```
-/brain config set /new/path/to/vault
-```
-
-## Vault structure
-
-```
-~/Documents/claude-brain/
+```text
+<vault>/
 ├── _system/
-│   ├── BRAIN.md              ← vault operating instructions
-│   └── project-index.md      ← registry of all projects
+│   ├── BRAIN.md
+│   └── project-index.md
 ├── concepts/
-│   └── <slug>.md             ← atomic notes for shared libraries, subsystems, infra, decisions
+│   └── <concept>.md
 └── projects/
     └── <slug>/
-        ├── context.md        ← state, active work, decisions (≤150 lines)
-        ├── architecture.md   ← detailed architecture reference (no line cap)
-        └── log.md            ← append-only session log
+        ├── context.md
+        ├── architecture.md
+        └── log.md
 ```
 
-## Token impact
+`context.md` is intentionally compact and session-start friendly. `architecture.md` is the deeper reference. `log.md` is append-only history.
 
-| Scenario | Lines loaded |
-|----------|-------------|
-| Session start (Tier 1) | ~160 (context.md + last log entry) |
-| Before an architectural decision (Tier 2) | + `architecture.md` in full + last 5 `log.md` entries |
-| Deep history trace (Tier 3) | + full `log.md` |
-| Re-discovering from scratch | 2,000–10,000+ |
+## How context loading works
+
+`claude-brain` uses tiered context loading:
+
+| Tier | When | What Claude reads |
+|---|---|---|
+| Tier 1 | Session start | `context.md` plus the latest `log.md` entry |
+| Tier 2 | Architecture or design decisions | Full `architecture.md` plus recent log entries |
+| Tier 3 | Historical questions | Full `log.md` |
+
+The goal is to keep routine session startup small while still preserving deeper history when it matters.
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `.claude-plugin/plugin.json` | Claude Code plugin manifest. |
+| `.claude-plugin/marketplace.json` | Marketplace listing metadata. |
+| `skills/brain/SKILL.md` | Full `/brain` command behavior. |
+| `hooks/*.sh` | Claude Code hooks installed into connected projects. |
+| `templates/*.md` | Files written into vaults and projects during setup. |
+| `.githooks/pre-commit` | Local branch-protection hook for this repository. |
+
+## Public repository hygiene
+
+This repository should contain plugin source, templates, hooks, and public documentation only.
+
+Do not commit generated per-project runtime state such as `.claude/`, `.codex/`, root `CLAUDE.md`, root `AGENTS.md`, IDE metadata, local vault files, or secrets. The repository `.gitignore` excludes these paths.
+
+The plugin intentionally writes local machine paths into connected projects because Claude Code hooks need absolute command paths. Those generated files are useful locally but should not be tracked in this public source repository.
+
+## Development notes
+
+- `skills/brain/SKILL.md` is the authoritative behavior spec for all `/brain` subcommands.
+- The version is stored in `.claude-plugin/plugin.json`.
+- Public-facing metadata should use `mehmet@tenekeci.ch`.
+- Run `/brain sync` in a connected project after upgrading the plugin to refresh copied hook scripts and templates.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
