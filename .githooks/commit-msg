@@ -2,7 +2,20 @@
 
 message_file=$1
 
-if grep -Eiq '^Co-Authored-By:[[:space:]].*(noreply@anthropic\.com|@anthropic\.com|noreply@openai\.com|@openai\.com|Claude (Sonnet|Opus|Haiku|Code)|ChatGPT|OpenAI Codex|GitHub Copilot)' "$message_file"; then
+# Match known AI bot co-author identities by display name or known bot
+# email address — never by a broad company domain. A real person at
+# anthropic.com or openai.com is a legitimate co-author, not the AI tool
+# itself, and must not be blocked.
+#
+# Copilot trailer forms verified against emitted output documented in
+# https://github.com/microsoft/vscode/issues/314311:
+#   Co-Authored-By: Copilot <copilot@github.com>
+#   Co-Authored-By: Copilot <223556219+Copilot@users.noreply.github.com>
+bot_names='Claude (Sonnet|Opus|Haiku|Code)|ChatGPT|OpenAI Codex|GitHub Copilot'
+bot_emails='noreply@anthropic\.com|noreply@openai\.com|copilot@github\.com|[0-9]+\+copilot@users\.noreply\.github\.com'
+
+if grep -Eiq "^Co-Authored-By:[[:space:]].*(${bot_names}|${bot_emails})" "$message_file" \
+  || grep -Eiq '^Co-Authored-By:[[:space:]]+Copilot[[:space:]]*<' "$message_file"; then
   echo "AI tools must not be listed as commit co-authors."
   echo "Remove the AI Co-Authored-By trailer and commit again."
   exit 1
