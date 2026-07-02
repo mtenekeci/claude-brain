@@ -923,18 +923,18 @@ To load this project in any session: /brain load <slug>
 
 ## /brain load <slug> [<slug2> ...]
 
-Load one or more topic projects' context into the current session. For topic projects only — code projects auto-load via CLAUDE.md.
+Load one or more additional project or topic contexts into the current session — manually, on top of whatever auto-loaded already. A code project's *own* context still auto-loads via its `CLAUDE.md` at session start, so `/brain load` is unnecessary just to re-load the current directory's project — but it is exactly how you pull in *other* code or topic projects' context that don't auto-load here, e.g. sibling projects in a monorepo (see Concept graph, below).
 
-Accepts multiple space-separated slugs. A slug may also name a **concept** (see Concept graph) instead of a project — loading a concept slug expands to every project listed in that concept's `## Used by` section, as shorthand for loading a related group at once (e.g. `/brain load imatch-data-flow` loads `classic`, `adapter`, and `modern` if that concept's `## Used by` lists all three).
+Accepts multiple space-separated slugs, project or topic, code or otherwise. A slug may also name a **concept** (see Concept graph) instead of a project — loading a concept slug expands to every project listed in that concept's `## Used by` section, as shorthand for loading a related group at once (e.g. `/brain load imatch-data-flow` loads `classic`, `adapter`, and `modern` if that concept's `## Used by` lists all three).
 
 1. Resolve vault path (see Config resolution at top).
 2. If `ARGUMENTS` is empty: ask "Which project or concept slug should I load? (run `/brain status` to list projects, or check `<VAULT_CONCEPTS>` for concept groups)" and stop.
 3. Parse `ARGUMENTS` on whitespace into `REQUESTED` (the list of slugs given).
 4. Resolve each entry in `REQUESTED`:
    - If `<VAULT_ROOT>/projects/<entry>/context.md` exists → resolves to that one project. Project slugs take precedence over a same-named concept.
-   - Else if `<VAULT_CONCEPTS>/<entry>.md` exists → read its `## Used by` section, extract every linked project slug from the `[[projects/<slug>/context|<slug>]]` lines, and resolve `<entry>` to that whole set. Remember `<entry>` as a concept expansion — its note gets surfaced in step 8.
+   - Else if `<VAULT_CONCEPTS>/<entry>.md` exists → read its `## Used by` section and extract every linked project slug from the `[[projects/<slug>/context|<slug>]]` lines. **Validate each extracted slug** against `<VAULT_ROOT>/projects/<slug>/context.md` before trusting it — a concept note can go stale (a project renamed, removed, or disconnected after the link was written). A slug that validates is added to the resolved set for `<entry>`; one that doesn't is recorded in `MISSING` as `<slug> (stale link in concept '<entry>')`, not silently carried forward to step 7. Remember `<entry>` as a concept expansion only if at least one of its linked slugs validated — its note gets surfaced in step 8.
    - Else → record `<entry>` in `MISSING`.
-5. Deduplicate the combined resolved project-slug list (`RESOLVED`) — the same project may be reached via more than one requested entry.
+5. Deduplicate the combined resolved project-slug list (`RESOLVED`) — every slug in it has already been validated to have a `context.md`, whether reached directly or via a concept. The same project may be reached via more than one requested entry.
 6. If `RESOLVED` is empty (nothing resolved): report `Not found: <entries in MISSING>. Available projects are listed in <VAULT_ROOT>/_system/project-index.md; concept groups are in <VAULT_CONCEPTS>.` and stop — do not proceed to load.
 7. For each slug in `RESOLVED`: read `<VAULT_ROOT>/projects/<slug>/context.md` in full, and read `log.md` — find the last `## ` header and extract from that header to the end of the file (the last session entry).
 8. For each entry that resolved via a concept expansion (step 4): also read that concept note (`<VAULT_CONCEPTS>/<entry>.md`) in full — it's the shared-architecture doc that motivated grouping these projects, so surface it, not just the slug list it produced.
