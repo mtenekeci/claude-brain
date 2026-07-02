@@ -63,9 +63,11 @@ fi
 if [ "$TOOL_NAME" = "Agent" ]; then
     ARCH_PATH=""
     CONTEXT_PATH=""
+    CONCEPTS_PATH="concepts/"
     [ -n "$VAULT" ] && [ -n "$SLUG" ] && ARCH_PATH=" ($VAULT/projects/$SLUG/architecture.md)"
     [ -n "$VAULT" ] && [ -n "$SLUG" ] && CONTEXT_PATH=" ($VAULT/projects/$SLUG/context.md)"
-    echo "Brain: subagent task completed. Check now: (1) if new patterns or conventions were discovered → add to architecture.md${ARCH_PATH}; (2) if this completes a full feature → update context.md${CONTEXT_PATH} State + Active Work."
+    [ -n "$VAULT" ] && CONCEPTS_PATH="$VAULT/concepts/"
+    echo "Brain: subagent task completed. Check now: (1) if new patterns or conventions were discovered → add to architecture.md${ARCH_PATH} — and for each one, would you plausibly write 'see [[X]]' about it from more than one place (another file, decision, or project)? Only if yes, create/update its note in ${CONCEPTS_PATH} and link it from the bullet — otherwise leave it as architecture.md prose only, do not create a concept note for every named library/subsystem/infra/decision; (2) if this completes a full feature → update context.md${CONTEXT_PATH} State + Active Work."
     exit 0
 fi
 
@@ -143,6 +145,8 @@ echo "$COUNT" > "$COUNTER_FILE"
 
 if [ $((COUNT % 3)) -eq 0 ] && [ "$COUNT" -le 9 ]; then
     ARCH_PATH=""
+    CONCEPTS_PATH="concepts/"
     [ -n "$VAULT" ] && [ -n "$SLUG" ] && ARCH_PATH=" ($VAULT/projects/$SLUG/architecture.md)"
-    echo "Brain: $COUNT source files read this session. Before continuing, update architecture.md${ARCH_PATH} with what you've learned — so future sessions don't re-read these files."
+    [ -n "$VAULT" ] && CONCEPTS_PATH="$VAULT/concepts/"
+    echo "Brain: $COUNT source files read this session. Before continuing, update architecture.md${ARCH_PATH} with what you've learned. Concept check (do this now, not later): for any bullet you're about to write, would you plausibly write 'see [[X]]' about it from more than one place (another file, decision, or project)? Only if yes, create or update its note in ${CONCEPTS_PATH} and link it from the bullet — most bullets stay architecture.md prose only, do not create a concept note for every named library/subsystem/infra/decision."
 fi
