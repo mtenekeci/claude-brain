@@ -921,23 +921,29 @@ To load this project in any session: /brain load <slug>
 
 ---
 
-## /brain load <slug>
+## /brain load <slug> [<slug2> ...]
 
-Load a topic project's context into the current session. For topic projects only — code projects auto-load via CLAUDE.md.
+Load one or more topic projects' context into the current session. For topic projects only — code projects auto-load via CLAUDE.md.
+
+Accepts multiple space-separated slugs. A slug may also name a **concept** (see Concept graph) instead of a project — loading a concept slug expands to every project listed in that concept's `## Used by` section, as shorthand for loading a related group at once (e.g. `/brain load imatch-data-flow` loads `classic`, `adapter`, and `modern` if that concept's `## Used by` lists all three).
 
 1. Resolve vault path (see Config resolution at top).
-2. Set `VAULT_PROJECT = <VAULT_ROOT>/projects/<slug>`
-3. Check if `VAULT_PROJECT/context.md` exists.
-   If not: "Project '`<slug>`' not found. Available projects are listed in `<VAULT_ROOT>/_system/project-index.md`. Run `/brain init` to create a new one."
-4. Read `VAULT_PROJECT/context.md` in full.
-5. Read `VAULT_PROJECT/log.md` — find the last `## ` header in the file and extract from that header to the end of the file. This is the last session entry.
-6. Hold both in working context for this session.
-7. Print:
-   ```
-   Loaded: <slug>
-
-   <contents of ## State section>
-   ```
+2. If `ARGUMENTS` is empty: ask "Which project or concept slug should I load? (run `/brain status` to list projects, or check `<VAULT_CONCEPTS>` for concept groups)" and stop.
+3. Parse `ARGUMENTS` on whitespace into `REQUESTED` (the list of slugs given).
+4. Resolve each entry in `REQUESTED`:
+   - If `<VAULT_ROOT>/projects/<entry>/context.md` exists → resolves to that one project. Project slugs take precedence over a same-named concept.
+   - Else if `<VAULT_CONCEPTS>/<entry>.md` exists → read its `## Used by` section, extract every linked project slug from the `[[projects/<slug>/context|<slug>]]` lines, and resolve `<entry>` to that whole set. Remember `<entry>` as a concept expansion — its note gets surfaced in step 8.
+   - Else → record `<entry>` in `MISSING`.
+5. Deduplicate the combined resolved project-slug list (`RESOLVED`) — the same project may be reached via more than one requested entry.
+6. If `RESOLVED` is empty (nothing resolved): report `Not found: <entries in MISSING>. Available projects are listed in <VAULT_ROOT>/_system/project-index.md; concept groups are in <VAULT_CONCEPTS>.` and stop — do not proceed to load.
+7. For each slug in `RESOLVED`: read `<VAULT_ROOT>/projects/<slug>/context.md` in full, and read `log.md` — find the last `## ` header and extract from that header to the end of the file (the last session entry).
+8. For each entry that resolved via a concept expansion (step 4): also read that concept note (`<VAULT_CONCEPTS>/<entry>.md`) in full — it's the shared-architecture doc that motivated grouping these projects, so surface it, not just the slug list it produced.
+9. Hold everything read in working context for this session.
+10. Report, in this order:
+    - If `MISSING` is non-empty: `Not found: <missing1>, <missing2>` (skip-and-warn — proceed with whatever did resolve).
+    - `Loaded: <slug1>, <slug2>, <slug3>` (the final `RESOLVED` list actually loaded).
+    - For each concept expansion: `Via concept '<entry>': <its resolved slugs>` followed by that concept note's description.
+    - For each loaded project (labeled by slug if more than one): its `## State` section content.
 
 ---
 

@@ -55,7 +55,7 @@ Every future Claude Code session in that project loads the vault context automat
 | Command | Purpose |
 |---|---|
 | `/brain init` | Connect the current project or topic to the vault. |
-| `/brain load <slug>` | Load an existing topic or project context manually. |
+| `/brain load <slug> [<slug2> ...]` | Load one or more existing topic/project contexts manually. A slug can also name a concept, loading every project that concept links together. |
 | `/brain sync` | Force a vault write and refresh installed brain assets. |
 | `/brain status` | Show configuration, hook health, vault paths, and sync status. |
 | `/brain config` | Show the configured vault path. |
