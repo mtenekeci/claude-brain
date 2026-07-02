@@ -1,0 +1,9 @@
+#!/bin/sh
+
+message_file=$1
+
+if grep -Eiq '^Co-Authored-By:[[:space:]].*(noreply@anthropic\.com|@anthropic\.com|noreply@openai\.com|@openai\.com|Claude (Sonnet|Opus|Haiku|Code)|ChatGPT|OpenAI Codex|GitHub Copilot)' "$message_file"; then
+  echo "AI tools must not be listed as commit co-authors."
+  echo "Remove the AI Co-Authored-By trailer and commit again."
+  exit 1
+fi
