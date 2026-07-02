@@ -24,11 +24,15 @@ Format:
 Derived constants (set after reading config):
 ```
 VAULT_ROOT     = <vault field from config>
-PLUGIN_DIR     = ~/.claude/plugins/claude-brain
+PLUGIN_DIR     = ${CLAUDE_PLUGIN_ROOT}
 VAULT_SYSTEM   = <VAULT_ROOT>/_system
 VAULT_PROJECTS = <VAULT_ROOT>/projects
 VAULT_CONCEPTS = <VAULT_ROOT>/concepts
 ```
+
+`PLUGIN_DIR` is Claude Code's built-in `${CLAUDE_PLUGIN_ROOT}` environment variable — it always points at the plugin's current install directory (marketplace cache, versioned or not, symlinked, or local dev) and is set automatically for every plugin invocation, so it never needs a "does this path exist" fallback. Two usage forms:
+- **In Bash commands** (e.g. `cp` in the Hook health check): write `${CLAUDE_PLUGIN_ROOT}` literally in the command string — the shell resolves it when the Bash tool executes.
+- **In Read instructions** (Read tool calls take a literal path, not shell syntax): resolve `PLUGIN_DIR` from the "Base directory for this skill" path shown in this invocation's context, stripping the trailing `/skills/brain` segment — then substitute that concrete path wherever `<PLUGIN_DIR>` appears below.
 
 ---
 
@@ -340,14 +344,14 @@ A reusable sub-procedure. Run this whenever CLAUDE.md is read to identify the cu
 Run the following bash commands to copy and make executable (do not embed script content inline — always copy from the plugin hooks directory):
 
 ```bash
-cp ~/.claude/plugins/claude-brain/hooks/session-start.sh ~/.claude/brain-session-start.sh
-cp ~/.claude/plugins/claude-brain/hooks/precompact.sh ~/.claude/brain-precompact.sh
-cp ~/.claude/plugins/claude-brain/hooks/session-end.sh ~/.claude/brain-session-end.sh
-cp ~/.claude/plugins/claude-brain/hooks/post-tool-use.sh ~/.claude/brain-post-tool-use.sh
+cp "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh" ~/.claude/brain-session-start.sh
+cp "${CLAUDE_PLUGIN_ROOT}/hooks/precompact.sh" ~/.claude/brain-precompact.sh
+cp "${CLAUDE_PLUGIN_ROOT}/hooks/session-end.sh" ~/.claude/brain-session-end.sh
+cp "${CLAUDE_PLUGIN_ROOT}/hooks/post-tool-use.sh" ~/.claude/brain-post-tool-use.sh
 chmod +x ~/.claude/brain-session-start.sh ~/.claude/brain-precompact.sh ~/.claude/brain-session-end.sh ~/.claude/brain-post-tool-use.sh
 ```
 
-If `~/.claude/plugins/claude-brain/hooks/` does not exist, skip this step silently — hooks are managed externally.
+This always runs — `${CLAUDE_PLUGIN_ROOT}` is set by Claude Code for every plugin invocation, so there's no path-existence fallback needed (a prior version of this step silently skipped when a hardcoded, version-specific path didn't exist, which meant hook updates never actually deployed).
 
 ### Step 1.5 — Configure git hooks path if needed
 
@@ -496,7 +500,7 @@ Read `~/.claude/settings.json`. Add the following entries to `permissions.allow`
 - `Bash(ls <VAULT_ROOT>/**)`
 - `Bash(find <VAULT_ROOT>/**)`
 - `Bash(mkdir -p <VAULT_ROOT>/**)`
-- `Bash(cp ~/.claude/plugins/claude-brain/hooks/**)`
+- `Bash(cp "${CLAUDE_PLUGIN_ROOT}"/hooks/**)`
 - `Bash(chmod +x ~/.claude/brain-*)`
 - `Bash(mkdir -p <PROJECT_PATH>/.claude)`
 - `Bash(cat <PROJECT_PATH>/.claude/settings.json*)`
@@ -528,7 +532,7 @@ Check if `<VAULT_ROOT>/_system/` exists.
 If it does NOT exist:
 1. Create directory `<VAULT_ROOT>/_system/`
 2. Create directory `<VAULT_ROOT>/projects/`
-3. Read `~/.claude/plugins/claude-brain/templates/BRAIN.md` verbatim.
+3. Read `<PLUGIN_DIR>/templates/BRAIN.md` verbatim.
    Write it to `<VAULT_ROOT>/_system/BRAIN.md`.
 4. Write `<VAULT_ROOT>/_system/project-index.md`:
    ```markdown
@@ -739,7 +743,7 @@ If the derived slug already appears in the table as a row value, stop and say:
    Apply contextual wikilinks (see Linking rules) to all prose sections.
 
 4. Write `log.md`:
-   - Read `~/.claude/plugins/claude-brain/templates/log.md`
+   - Read `<PLUGIN_DIR>/templates/log.md`
    - Replace `{date}` with today's date in `YYYY-MM-DD` format
    - Replace `{slug}` with the slug
    - If existing project: replace the "Project initialized" Completed line with a one-sentence summary of what was found (e.g. "Seeded from existing project — 47 commits, React/TypeScript app for X")
@@ -753,7 +757,7 @@ If the derived slug already appears in the table as a row value, stop and say:
 
 ### If code project: write CLAUDE.md to project folder
 
-1. Read `~/.claude/plugins/claude-brain/templates/CLAUDE.md`
+1. Read `<PLUGIN_DIR>/templates/CLAUDE.md`
 2. Replace `{project-name}` with the display name
 3. Replace `{slug}` with the slug
 4. Replace `{vault-root}` with the absolute `VAULT_ROOT` path
@@ -770,7 +774,7 @@ The PreCompact hook writes a `(pre-compact)` checkpoint entry to `log.md` via ba
 Run:
 
 ```bash
-cp ~/.claude/plugins/claude-brain/hooks/precompact.sh ~/.claude/brain-precompact.sh
+cp "${CLAUDE_PLUGIN_ROOT}/hooks/precompact.sh" ~/.claude/brain-precompact.sh
 chmod +x ~/.claude/brain-precompact.sh
 ```
 
@@ -794,7 +798,7 @@ The PostToolUse hook has three triggers: (1) counts source file reads and remind
 Run:
 
 ```bash
-cp ~/.claude/plugins/claude-brain/hooks/post-tool-use.sh ~/.claude/brain-post-tool-use.sh
+cp "${CLAUDE_PLUGIN_ROOT}/hooks/post-tool-use.sh" ~/.claude/brain-post-tool-use.sh
 chmod +x ~/.claude/brain-post-tool-use.sh
 ```
 
@@ -823,7 +827,7 @@ The SessionStart hook fires before Claude sees the first user message. Its stdou
 Run:
 
 ```bash
-cp ~/.claude/plugins/claude-brain/hooks/session-start.sh ~/.claude/brain-session-start.sh
+cp "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh" ~/.claude/brain-session-start.sh
 chmod +x ~/.claude/brain-session-start.sh
 ```
 
@@ -854,7 +858,7 @@ The SessionEnd hook writes a meaningful auto-close log entry when a session ends
 Run:
 
 ```bash
-cp ~/.claude/plugins/claude-brain/hooks/session-end.sh ~/.claude/brain-session-end.sh
+cp "${CLAUDE_PLUGIN_ROOT}/hooks/session-end.sh" ~/.claude/brain-session-end.sh
 chmod +x ~/.claude/brain-session-end.sh
 ```
 
