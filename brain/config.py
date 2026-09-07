@@ -1,0 +1,36 @@
+"""Config + plugin data dir. Single source for paths every other module needs."""
+import json, os, time
+
+CONFIG_PATH = os.environ.get("BRAIN_CONFIG") or os.path.expanduser("~/.claude/brain.config")
+
+def _config_path():
+    return os.environ.get("BRAIN_CONFIG") or os.path.expanduser("~/.claude/brain.config")
+
+def load_config():
+    """Return the parsed brain.config dict, or {} if missing/invalid."""
+    try:
+        with open(_config_path()) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+def vault_root():
+    v = load_config().get("vault")
+    return os.path.expanduser(v) if isinstance(v, str) and v else None
+
+def gate_mode():
+    """'all' (default) | 'commits' | 'off' — Stop-gate setting (spec §7.7)."""
+    return str(load_config().get("gate", "all"))
+
+def data_dir():
+    d = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.claude/brain-data")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def log_error(msg):
+    try:
+        with open(os.path.join(data_dir(), "brain.log"), "a") as f:
+            f.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), msg))
+    except OSError:
+        pass
