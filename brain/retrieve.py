@@ -8,7 +8,7 @@ from brain import graph
 
 STOP = set("the and for with that this from into what when where which how does your about have will just like also than then them they there their been were was are is it its of to in on at by an as or be do if we you can should would could please make sure".split())
 DONE_SIGNALS = ("thanks", "thank you", "done", "ship it", "looks good", "lgtm", "that's all", "close this", "bye", "good job", "perfect")
-_NEGATIONS = ("not", "isn't", "aren't", "don't", "never", "no")
+_NEGATIONS = ("not", "isn't", "aren't", "don't", "never", "nothing", "isnt", "dont")
 _SPAN_RE = re.compile(r"`([^`]+)`|\"([^\"]+)\"|'([^']{3,})'")
 _WORD_RE = re.compile(r"[A-Za-z_][\w./-]{3,}")
 
@@ -18,7 +18,9 @@ def is_system_prompt(prompt):
 
 def is_done_signal(prompt):
     """A DONE_SIGNALS phrase on a word boundary, unless negated within 3 words before it
-    ("this isn't done yet" must not fire, but "thanks, ship it" must)."""
+    ("this isn't done yet" must not fire, but "thanks, ship it" must). "no" is a much weaker
+    negator than the others ("no problem, ship it" is still a done signal) so it only counts
+    when it is the word immediately before the signal ("no thanks" does not fire)."""
     p = (prompt or "").lower()
     if len(p) >= 80:
         return False
@@ -28,6 +30,8 @@ def is_done_signal(prompt):
             continue
         before = re.findall(r"[\w']+", p[:m.start()])[-3:]
         if any(w in _NEGATIONS for w in before):
+            continue
+        if before and before[-1] == "no":
             continue
         return True
     return False

@@ -18,6 +18,8 @@ class TokenTests(unittest.TestCase):
         self.assertTrue(retrieve.is_done_signal("thanks, ship it"))
         self.assertTrue(retrieve.is_done_signal("done"))
         self.assertFalse(retrieve.is_done_signal("abandoned"))
+        self.assertFalse(retrieve.is_done_signal("no thanks"))
+        self.assertTrue(retrieve.is_done_signal("no problem, ship it"))
 
 class RetrieveTests(unittest.TestCase):
     def setUp(self):
@@ -61,6 +63,21 @@ class RetrieveTests(unittest.TestCase):
         s.save()
         hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo, prompt="explain the auth flow"))
         self.assertLessEqual(len(state.SessionState.load("s1").injected), 300)
+
+    def test_injected_cap_preserves_order(self):
+        ordered = ["dummy:%d" % i for i in range(300)]
+        s = state.SessionState.load("s1")
+        s.injected = list(ordered)
+        s.save()
+        hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo, prompt="explain the auth flow"))
+        result = state.SessionState.load("s1").injected
+        self.assertEqual(len(result), 300)
+        n_new = len(result) - len([i for i in result if i.startswith("dummy:")])
+        # the oldest n_new dummy ids were dropped (order preserved), the survivors keep their
+        # relative order, and the newly-injected ids land at the end in insertion order
+        self.assertEqual(result[:300 - n_new], ordered[n_new:])
+        self.assertNotIn("dummy:0", result)
+        self.assertIn("module:auth-flow", result[300 - n_new:])
 
 class DedupeTests(unittest.TestCase):
     """render_with_ids must report exactly the ids it rendered — not every node considered —

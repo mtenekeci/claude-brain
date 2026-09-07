@@ -283,7 +283,10 @@ def on_user_prompt_submit(ctx):
     text, ids = retrieve.render_with_ids(g, nodes)
     if not text:
         return EMPTY
-    s.injected = (list(already) + [i for i in ids if i not in already])[-_INJECTED_CAP:]
+    merged = list(s.injected) + [i for i in ids if i not in already]
+    seen = set()
+    merged = [i for i in merged if not (i in seen or seen.add(i))]
+    s.injected = merged[-_INJECTED_CAP:]
     return HookResult(text)
 
 _HANDLERS["Stop"] = on_stop
