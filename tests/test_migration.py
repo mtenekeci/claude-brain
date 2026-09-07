@@ -31,6 +31,8 @@ class MigrationTests(unittest.TestCase):
         actions = migrate.migrate_project(proj, self.vault, self.repo)
         self.assertTrue(any("claude-md" in a for a in actions), actions)
         self.assertIn("hooks:4", actions); self.assertIn("path", actions)
+        self.assertIn("codemap", actions)
+        self.assertTrue(os.path.exists(os.path.join(self.vault, "projects", "old-app", "codemap.md")))
         backup = os.path.join(self.repo, "CLAUDE.md.brain-bak")          # backed up even with a separator
         self.assertTrue(os.path.exists(backup))
         with open(backup, encoding="utf-8") as f:

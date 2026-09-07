@@ -93,3 +93,72 @@ class CodemapExtractTests(unittest.TestCase):
                     '[tool.poetry.group.dev.dependencies]\npytest = "^8"\n')
         deps = codemap.manifest_deps(self.repo)
         self.assertIn("requests", deps); self.assertIn("pytest", deps); self.assertNotIn("python", deps)
+
+class CodemapRenderTests(unittest.TestCase):
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = make_vault(self.tmp.name, slug="demo"); write_config(self.tmp.name, self.vault)
+        self.repo = make_project(self.tmp.name, slug="demo"); make_source_tree(self.repo)
+        self.pdir = os.path.join(self.vault, "projects", "demo")
+    def tearDown(self):
+        self.tmp.cleanup(); os.environ.clear(); os.environ.update(self._env)
+
+    def test_render_generated_tree_lists_symbols_and_deps(self):
+        layer = codemap.build_layer(self.repo)
+        out = codemap.render_generated(layer)
+        self.assertIn("src/auth/session.ts  (SessionStore, refresh, TTL)", out)
+        self.assertIn("deps: jest, next-auth, pg", out)
+        self.assertLessEqual(out.count("\n"), 150)
+        self.assertEqual(out, codemap.render_generated(layer))          # deterministic
+
+    def test_render_generated_prunes_large_dirs_deterministically(self):
+        files = [{"path": "big/f%03d.ts" % i, "lines": 1, "symbols": ["s"], "imports": []} for i in range(200)]
+        files += [{"path": "small/a.ts", "lines": 1, "symbols": ["a"], "imports": []}]
+        layer = {"sha": "x", "files": files, "deps": [], "generated_at": 0}
+        out = codemap.render_generated(layer, cap=40)
+        self.assertLessEqual(out.count("\n"), 40)
+        self.assertIn("big/  (200 files, collapsed)", out)
+        self.assertIn("small/a.ts  (a)", out)
+
+    def test_split_and_render_codemap_preserve_curated(self):
+        curated = "## Modules\n| module | path | responsibility | links |\n|---|---|---|---|\n| auth | src/auth/ | sessions | [[concepts/nextauth]] |\n\n## Where to look\n| question | path |\n|---|---|\n| where are sessions? | src/auth/session.ts |\n"
+        layer = codemap.build_layer(self.repo)
+        text = codemap.render_codemap(layer, curated)
+        sha, gen, cur = codemap.split_codemap(text)
+        self.assertEqual(sha, layer["sha"]); self.assertIn("src/db.ts", gen); self.assertEqual(cur, curated)
+        self.assertEqual(codemap.split_codemap("just curated\n"), ("", "", "just curated\n"))
+
+    def test_parse_curated_tables(self):
+        _, _, cur = codemap.split_codemap(codemap.render_codemap(codemap.build_layer(self.repo),
+            "## Modules\n| module | path | responsibility | links |\n|---|---|---|---|\n| Auth flow | src/auth/ | Session cookies | uses:: [[concepts/nextauth|NextAuth]] |\n\n## Where to look\n| question | path |\n|---|---|\n| sessions? | src/auth/session.ts |\n"))
+        mods = codemap.parse_modules(cur)
+        self.assertEqual(mods, [{"module": "Auth flow", "path": "src/auth/", "responsibility": "Session cookies", "links": "uses:: [[concepts/nextauth|NextAuth]]"}])
+        self.assertEqual(codemap.parse_where(cur), [{"question": "sessions?", "path": "src/auth/session.ts"}])
+        self.assertEqual(codemap.parse_modules(codemap.curated_template("demo")), [])
+
+    def test_ensure_then_regenerate_only_on_head_change(self):
+        cm = os.path.join(self.pdir, "codemap.md")
+        self.assertTrue(codemap.ensure(self.repo, self.pdir)); self.assertTrue(os.path.exists(cm))
+        self.assertFalse(codemap.ensure(self.repo, self.pdir))
+        with open(cm, encoding="utf-8") as f: before = f.read()
+        self.assertFalse(codemap.regenerate(self.repo, self.pdir))          # same fingerprint → no rewrite
+        with open(os.path.join(self.repo, "src", "dirty.ts"), "w") as f: f.write("export function dirty() {}\n")
+        self.assertTrue(codemap.regenerate(self.repo, self.pdir))           # uncommitted edit changes the fingerprint
+        self.assertIn("src/dirty.ts  (dirty)", open(cm, encoding="utf-8").read())
+        self.assertFalse(codemap.regenerate(self.repo, self.pdir))
+        with open(cm, "a", encoding="utf-8") as f: f.write("| auth | src/auth/ | sessions | |\n")
+        import subprocess
+        with open(os.path.join(self.repo, "src", "new.ts"), "w") as f: f.write("export function fresh() {}\n")
+        subprocess.run(["git", "-C", self.repo, "add", "-A"], check=True); subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", "n"], check=True)
+        self.assertTrue(codemap.regenerate(self.repo, self.pdir))
+        with open(cm, encoding="utf-8") as f: after = f.read()
+        self.assertIn("src/new.ts  (fresh)", after)
+        self.assertTrue(after.endswith("| auth | src/auth/ | sessions | |\n"))   # curated block kept, incl. the appended row
+        self.assertNotEqual(codemap.split_codemap(before)[0], codemap.split_codemap(after)[0])
+        self.assertTrue(codemap.regenerate(self.repo, self.pdir, force=True))
+        self.assertGreater(codemap.file_count(self.repo), 5)
+
+    def test_regenerate_tolerates_missing_codemap(self):
+        self.assertTrue(codemap.regenerate(self.repo, self.pdir, force=True))
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, "codemap.md")))

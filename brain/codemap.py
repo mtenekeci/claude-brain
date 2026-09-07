@@ -18,7 +18,8 @@ def _keep(rel):
 
 def list_files(project_dir):
     try:
-        r = subprocess.run(["git", "-C", project_dir, "ls-files", "-z"], capture_output=True, timeout=10)
+        r = subprocess.run(["git", "-C", project_dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                           capture_output=True, timeout=10)
         if r.returncode == 0:
             rels = [p.decode("utf-8", "replace") for p in r.stdout.split(b"\0") if p]
             return sorted(p for p in rels if _keep(p))
@@ -201,6 +202,147 @@ def read_layer(pdir):
     except (OSError, ValueError):
         return None
 
+TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "codemap.md")
+GEN_START_RE = re.compile(r"<!-- brain:generated:start sha=([0-9a-f:]*) -->\n?")
+GEN_END = "<!-- brain:generated:end -->"
+
+def gen_start(sha):
+    return "<!-- brain:generated:start sha=%s -->" % sha
+
+def split_codemap(text):
+    m = GEN_START_RE.search(text)
+    if not m or GEN_END not in text[m.end():]:
+        return "", "", text
+    end = text.index(GEN_END, m.end())
+    curated = text[end + len(GEN_END):].lstrip("\n")
+    return m.group(1), text[m.end():end], curated
+
+def curated_template(slug):
+    text = _read(TEMPLATE_PATH)
+    return text.replace("{slug}", slug)
+
+def _tree_lines(layer):
+    """One line per file: '<path>  (<symbols>)'; directories are implicit via sorted paths."""
+    lines = []
+    for f in layer["files"]:
+        syms = ", ".join(f["symbols"])
+        lines.append("%s  (%s)" % (f["path"], syms) if syms else f["path"])
+    return lines
+
+def render_generated(layer, cap=150):
+    header = ["# Code map (generated — do not edit above the end marker)", "head: %s" % (layer.get("sha") or "-"),
+              "deps: %s" % (", ".join(layer.get("deps") or []) or "-"), ""]
+    files = list(layer["files"])
+    budget = cap - len(header) - 1
+    # Group by top-level directory (first path segment, or '.' for root files); collapse the largest groups first
+    groups = {}
+    for f in files:
+        top = f["path"].split("/", 1)[0] if "/" in f["path"] else "."
+        groups.setdefault(top, []).append(f)
+    collapsed = set()
+    def total():
+        return sum(1 if g in collapsed else len(fs) for g, fs in groups.items())
+    order = sorted(groups, key=lambda g: (-len(groups[g]), g))
+    for g in order:
+        if total() <= budget:
+            break
+        if len(groups[g]) > 1:
+            collapsed.add(g)
+    body = []
+    for f in files:
+        top = f["path"].split("/", 1)[0] if "/" in f["path"] else "."
+        if top in collapsed:
+            continue
+        syms = ", ".join(f["symbols"])
+        body.append("%s  (%s)" % (f["path"], syms) if syms else f["path"])
+    for g in sorted(collapsed):
+        body.append("%s/  (%d files, collapsed)" % (g, len(groups[g])))
+    body.sort()
+    return "\n".join(header + body[:budget]) + "\n"
+
+def render_codemap(layer, curated):
+    return gen_start(layer.get("sha") or "") + "\n" + render_generated(layer) + GEN_END + "\n\n" + curated.lstrip("\n")
+
+def file_count(project_dir):
+    return len(list_files(project_dir))
+
+def _codemap_path(pdir):
+    return os.path.join(pdir, "codemap.md")
+
 def ensure(project_dir, pdir):
-    """Create codemap.md if missing. Placeholder until the renderer lands (next task): reports nothing created."""
-    return False
+    path = _codemap_path(pdir)
+    if os.path.exists(path):
+        return False
+    layer = build_layer(project_dir)
+    write_layer(pdir, layer)
+    slug = os.path.basename(pdir.rstrip("/"))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(render_codemap(layer, curated_template(slug)))
+    return True
+
+def regenerate(project_dir, pdir, force=False):
+    path = _codemap_path(pdir)
+    if not os.path.exists(path):
+        return ensure(project_dir, pdir)
+    text = _read(path)
+    stored_sha, _, curated = split_codemap(text)
+    current = fingerprint(project_dir)
+    if not force and current and current == stored_sha:
+        return False
+    layer = build_layer(project_dir)
+    write_layer(pdir, layer)
+    if not curated.strip():
+        curated = curated_template(os.path.basename(pdir.rstrip("/")))
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(render_codemap(layer, curated))
+    os.replace(tmp, path)
+    return True
+
+def _split_cells(line):
+    """Split a '|'-delimited table row on '|' outside '[[...]]' wikilinks (aliases contain '|')."""
+    cells = []
+    cur = []
+    depth = 0
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if line.startswith("[[", i):
+            depth += 1
+            cur.append("[[")
+            i += 2
+            continue
+        if line.startswith("]]", i):
+            depth = max(0, depth - 1)
+            cur.append("]]")
+            i += 2
+            continue
+        if ch == "|" and depth == 0:
+            cells.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    cells.append("".join(cur))
+    return cells
+
+def _table_rows(curated, heading, ncols):
+    from brain import vault
+    body = vault.get_section(curated, heading)
+    rows = []
+    for line in body.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in _split_cells(line.strip().strip("|"))]
+        if len(cells) != ncols or set("".join(cells)) <= set("-: ") or cells[0] in ("module", "question"):
+            continue
+        rows.append(cells)
+    return rows
+
+def parse_modules(curated):
+    return [{"module": r[0], "path": r[1], "responsibility": r[2], "links": r[3]} for r in _table_rows(curated, "Modules", 4)]
+
+def parse_where(curated):
+    return [{"question": r[0], "path": r[1]} for r in _table_rows(curated, "Where to look", 2)]
