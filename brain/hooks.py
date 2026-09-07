@@ -1,10 +1,11 @@
 """Hook handlers. dispatch() is the only entry point; each on_<event> returns a HookResult.
 Contract: never raise, never print outside brain projects."""
 import os, re, shlex, subprocess, sys, time, traceback
-from brain import briefing, codemap, config, graph, project, state, vault, gitinfo
+from brain import briefing, codemap, config, graph, project, retrieve, state, vault, gitinfo
 
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
 _SOFT_EDIT_THRESHOLD = 5        # soft-tier Stop gate: uncommitted source edits before nudging
+_INJECTED_CAP = 300             # bound on ctx.state.injected — a long session must not grow this file forever
 from brain.codemap import SOURCE_EXTS
 
 class HookResult(object):
@@ -323,9 +324,33 @@ def on_stop(ctx):
 def on_user_prompt_submit(ctx):
     # A <task-notification> prompt is a background-subagent completion notice, not a user
     # turn (spec §3/§7.2) — it must not clear a block the current turn already earned.
-    if not str(ctx.payload.get("prompt") or "").lstrip().startswith("<task-notification>"):
+    prompt = str(ctx.payload.get("prompt") or "")
+    if not prompt.lstrip().startswith("<task-notification>"):
         ctx.state.stop_blocks_this_turn = 0
-    return EMPTY   # Plan 2 adds per-prompt graph retrieval here
+    if retrieve.is_system_prompt(prompt):
+        return EMPTY
+    s = ctx.state
+    already = set(s.injected)
+    if retrieve.is_done_signal(prompt) and (s.commits_since_vault_write + s.source_edits_since_vault_write) > 0:
+        return HookResult("Brain: user signalled done — write the log entry and update ## State / ## Active Work in %s now.\n" % ctx.context_path)
+    terms = retrieve.tokens(prompt)
+    if not terms:
+        return EMPTY
+    try:
+        g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
+    except Exception as e:
+        config.log_error("retrieval graph load failed: %r" % e); return EMPTY
+    nodes = retrieve.select(g, terms, already)
+    if not nodes:
+        return EMPTY
+    text, ids = retrieve.render_with_ids(g, nodes)
+    if not text:
+        return EMPTY
+    merged = list(s.injected) + [i for i in ids if i not in already]
+    seen = set()
+    merged = [i for i in merged if not (i in seen or seen.add(i))]
+    s.injected = merged[-_INJECTED_CAP:]
+    return HookResult(text)
 
 _HANDLERS["Stop"] = on_stop
 _HANDLERS["UserPromptSubmit"] = on_user_prompt_submit
