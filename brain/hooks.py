@@ -195,3 +195,35 @@ _HANDLERS = {
     "SessionStart": on_session_start,
 }
 _HANDLERS["PostToolUse"] = on_post_tool_use
+
+def gate_decision(s, mode, stop_hook_active, agent_id, last_msg):
+    """Return a block reason, or None. Pure: no I/O."""
+    if mode == "off" or stop_hook_active or agent_id or s.stop_blocks_this_turn:
+        return None
+    k, m = s.commits_since_vault_write, s.source_edits_since_vault_write
+    hard = k > 0
+    soft = mode == "all" and m >= 5 and not (last_msg or "").rstrip().endswith("?")
+    if not (hard or soft):
+        return None
+    what = []
+    if k: what.append("%d commit%s" % (k, "" if k == 1 else "s"))
+    if m: what.append("%d uncommitted source edit%s" % (m, "" if m == 1 else "s"))
+    return ("Brain: this turn landed %s with no vault update. Edit ## State + ## Active Work in %s "
+            "(and append a log.md entry if a task completed), then finish." % (" and ".join(what), "{context}"))
+
+def on_stop(ctx):
+    reason = gate_decision(ctx.state, config.gate_mode(), bool(ctx.payload.get("stop_hook_active")),
+                           ctx.payload.get("agent_id"), str(ctx.payload.get("last_assistant_message") or ""))
+    if reason is None:
+        return EMPTY
+    ctx.state.stop_blocks_this_turn = 1
+    if ctx.state.source_edits_since_vault_write >= 5:
+        ctx.state.source_edits_since_vault_write = 0   # soft tier resets after firing (spec §7.7)
+    return HookResult(json={"decision": "block", "reason": reason.replace("{context}", ctx.context_path)})
+
+def on_user_prompt_submit(ctx):
+    ctx.state.stop_blocks_this_turn = 0
+    return EMPTY   # Plan 2 adds per-prompt graph retrieval here
+
+_HANDLERS["Stop"] = on_stop
+_HANDLERS["UserPromptSubmit"] = on_user_prompt_submit
