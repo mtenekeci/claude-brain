@@ -49,7 +49,9 @@ echo -e "def a():\n    return 1" > "$S/repo/a.py"
 git -C "$S/repo" add . && git -C "$S/repo" commit -q -m init
 
 # brain.config + env
-echo "{\"vault\": \"$S/vault\"}" > "$S/brain.config"
+# async_regen MUST be false here — otherwise SessionStart / graph loads below spawn a real
+# detached `map --regen` process against the scratch repo.
+echo "{\"vault\": \"$S/vault\", \"async_regen\": false}" > "$S/brain.config"
 mkdir -p "$S/data"
 ```
 
@@ -103,6 +105,93 @@ Re-run the Check 1 prompt. Expect: reply/stdout does NOT contain
 `Brain: migrated` a second time, and `CLAUDE.md` is byte-for-byte unchanged
 from after Check 1.
 
+## Checks 6–9 — retrieval + briefing (separate sandbox)
+
+Checks 6–9 use a *second* scratch sandbox (a fresh `mktemp -d`, call it `$S`)
+built directly from `tests.helpers` so the graph has real content to hit,
+rather than reusing the Check 1–5 sandbox (which by then has migrated away
+its legacy state):
+
+```bash
+S=$(mktemp -d)
+python3 - "$S" <<'EOF'
+import sys, os
+sys.path.insert(0, "/Users/mtenekeci/Documents/Projects/claude-brain")
+from tests.helpers import make_vault, make_project, make_source_tree
+S = sys.argv[1]
+vault = make_vault(S, slug="smoke")
+repo = make_project(S, slug="smoke", vault=vault, legacy=False)
+make_source_tree(repo)
+EOF
+
+# Add a `## Modules` row so retrieval / graph top have a module node to hit.
+python3 - "$S" <<'EOF'
+import sys, os
+sys.path.insert(0, "/Users/mtenekeci/Documents/Projects/claude-brain")
+S = sys.argv[1]
+pdir = os.path.join(S, "vault", "projects", "smoke")
+from brain import codemap
+codemap.ensure(os.path.join(S, "repo"), pdir)
+path = os.path.join(pdir, "codemap.md")
+text = open(path, encoding="utf-8").read()
+text = text.replace(
+    "## Modules\n| module | path | responsibility | links |\n|---|---|---|---|\n",
+    "## Modules\n| module | path | responsibility | links |\n|---|---|---|---|\n"
+    "| Auth flow | src/auth/ | Session cookies | uses:: [[concepts/nextauth|NextAuth]] |\n")
+open(path, "w", encoding="utf-8").write(text)
+EOF
+
+echo "{\"vault\": \"$S/vault\", \"async_regen\": false}" > "$S/brain.config"
+mkdir -p "$S/data"
+cd "$S/repo"
+```
+
+Each check below is its own `claude -p` call with the same env/flags as
+Checks 1–5 (`--allowedTools "Bash,Edit,Read,Grep"`, plus `Agent,Task` for
+Check 8).
+
+### Check 6 — Per-prompt graph hits
+
+Prompt: `I need to work on the auth flow module. Reply with the exact text of any block in your context that starts with the words Brain: graph hits, verbatim.`
+
+Expect: reply quotes a `Brain: graph hits for "..."` block containing
+`module auth-flow  src/auth/  — Auth flow`. Front-load the module name in the
+prompt — `retrieve.tokens` caps at 12 terms, so a wordy prompt can push the
+term of interest past the cap and the hit silently falls back to generic
+project/decision/question nodes instead (observed once while drafting this
+check).
+
+Dedupe note: dedupe of repeat hits is scoped to `state.injected` on the
+*session*, not the CLI invocation — each separate `claude -p` gets a fresh
+session id, so a second `claude -p` run with an identical prompt is expected
+to repeat the block rather than suppress it. That's by design, not a bug;
+this check only asserts the block appears (once) in a single run.
+
+### Check 7 — Grep pre-tool context
+
+Prompt: `Run a Grep for the symbol SessionStore in this repo. Before or after doing so, your tool context may include a line starting with the words Brain: graph already knows — quote that exact line verbatim if present, otherwise say NONE.`
+
+Expect: reply quotes `Brain: graph already knows —` followed by a
+`symbol src/auth/session.ts#SessionStore ... — SessionStore` line.
+
+### Check 8 — Subagent briefing
+
+Prompt: `Dispatch an Explore subagent (or Task tool general-purpose agent if Explore is unavailable) with this exact instruction: 'Reply with only the first line of your context that starts with the words Brain briefing:, verbatim, and nothing else.' Then relay that subagent's exact reply back to me, prefixed with SUBAGENT SAID:.`
+(add `Agent,Task` to `--allowedTools` for this one run)
+
+Expect: reply contains `SUBAGENT SAID: Brain briefing: this project is "smoke". Vault: .../projects/smoke/ (context.md, architecture.md, codemap.md).`
+
+### Check 9 — `graph top` CLI
+
+From `$S/repo`:
+
+```bash
+env BRAIN_CONFIG="$S/brain.config" CLAUDE_PLUGIN_DATA="$S/data" \
+  python3 /Users/mtenekeci/Documents/Projects/claude-brain/brain/__main__.py graph top
+```
+
+Expect: first line is `project smoke  projects/smoke/context.md  — smoke  (N)`.
+
 ## Last run
 
 - **Date:** 2026-09-07
@@ -114,3 +203,14 @@ from after Check 1.
 - **Check 5 (Migration idempotent): PASS.** No `Brain: migrated` in the re-run's stdout; `CLAUDE.md` diffed byte-identical to its post-Check-1 state.
 - **Bugs found:** none. All 61 unit tests remained green after deleting the bash hooks (`python3 -m unittest discover -s tests`).
 - **Deviation from the original plan:** this run used a fully isolated scratch vault/repo/config instead of this repository's own files, so as not to mutate the maintainer's live `CLAUDE.md` / `.claude/settings.json` / real vault. Re-run against this repo itself before a release if you want the original in-repo variant.
+
+### Checks 6–9 (Task 12, separate sandbox)
+
+- **Date:** 2026-09-08
+- **Mode:** `--plugin-dir`, second scratch sandbox built via `tests.helpers` as described above; `brain.config` included `"async_regen": false`.
+- **Check 6 (Per-prompt graph hits): PASS.** First attempt used a longer, quote-heavy prompt and the reply's `Brain: graph hits` block surfaced only generic `project`/`decision`/`question` nodes — no `auth-flow` hit. Root cause (confirmed with a direct `retrieve.tokens`/`retrieve.select` call): `retrieve.tokens` caps at 12 terms and the wordy prompt pushed "auth"/"flow"/"module" past the cap before they were ever extracted, so `select` fell back to the top-scoring generic nodes. This is retrieval behaving correctly given its token budget, not a bug — re-ran with a shorter, front-loaded prompt (`I need to work on the auth flow module. ...`) and got: `Brain: graph hits for "smoke, Auth flow, Use Postgres (2026-01-02)" —` followed by `module auth-flow  src/auth/  — Auth flow` with its `Session cookies` responsibility and file list. Recorded the front-loading caveat directly in the Check 6 instructions above. Cross-run dedupe: not directly observable via `-p` (each invocation gets a fresh session id, so `state.injected` dedupe never engages across separate `claude -p` calls) — this is dedupe-by-design, not something this harness can exercise; noted in the check text rather than asserted as PASS/FAIL.
+- **Check 7 (Grep pre-tool context): PASS.** Reply: `**Brain: graph already knows —**` followed by `symbol src/auth/session.ts#SessionStore  src/auth/session.ts  — SessionStore`.
+- **Check 8 (Subagent briefing): PASS.** Reply: `SUBAGENT SAID: Brain briefing: this project is "smoke". Vault: <tmp>/vault/projects/smoke/ (context.md, architecture.md, codemap.md).` — first line of the briefing, quoted verbatim by the dispatched subagent.
+- **Check 9 (`graph top` CLI): PASS.** First line of output: `project smoke  projects/smoke/context.md  — smoke  (4)`, ahead of `module auth-flow`, the decision, the question, and the architecture section node.
+- **Bugs found:** none in `brain/` — the Check 6 surprise was a prompt-authoring issue (token-budget interaction with prompt wording), not a defect; no code or test change was warranted.
+- **Unit tests:** full suite green both plain and with `CLAUDE_PROJECT_DIR=$PWD` set (154 tests, including the 3 new `tests/test_budgets.py` cases).
