@@ -1,6 +1,7 @@
 """Knowledge graph derived from the vault (+ code layer, part 2). A read-only index — never writes markdown."""
-import os, re
+import json, os, re
 from collections import deque
+from brain import codemap
 from brain import vault as vt
 
 NODE_TYPES = ("project", "concept", "decision", "question", "module", "section", "file", "symbol")
@@ -199,7 +200,9 @@ def build_vault_layer(g, vault_root, slug):
     ctx = vt.read(ctx_path); arch = vt.read(arch_path)
     fm, _ = vt.parse_frontmatter(ctx)
     pid = node_id("project", slug)
-    g.add_node(Node(pid, "project", fm.get("project") or slug, path=ctx_path, meta={"path": fm.get("path", "")}))
+    # meta["vault"] lives on the project node so renderers can shorten vault paths without a global.
+    g.add_node(Node(pid, "project", fm.get("project") or slug, path=ctx_path,
+                    meta={"path": fm.get("path", ""), "vault": vault_root}))
     # concepts first so links/mentions can resolve
     cdir = os.path.join(vault_root, "concepts")
     concept_files = sorted(f for f in (os.listdir(cdir) if os.path.isdir(cdir) else []) if f.endswith(".md"))
@@ -238,3 +241,200 @@ def build_vault_layer(g, vault_root, slug):
     _link_edges(g, pid, strip_fences(ctx), slug)
     mention_edges(g, [ctx, arch], slug)
     return g
+
+# ---------------------------------------------------------------- code layer
+
+def build_code_layer(g, project_slug, layer, modules):
+    """File/symbol nodes from the generated layer + curated module rows bound to path prefixes."""
+    pid = node_id("project", project_slug)
+    files = (layer or {}).get("files", [])
+    for f in files:
+        fid = node_id("file", f["path"])
+        g.add_node(Node(fid, "file", os.path.basename(f["path"]), path=f["path"], meta={"lines": f.get("lines", 0)}))
+        for s in f.get("symbols", []):
+            sid = node_id("symbol", "%s#%s" % (f["path"], s))
+            g.add_node(Node(sid, "symbol", s, path=f["path"])); g.add_edge(fid, sid, "contains")
+    for f in files:                                     # second pass: every import target now exists
+        for imp in f.get("imports", []):
+            g.add_edge(node_id("file", f["path"]), node_id("file", imp), "imports")
+    for row in modules or []:
+        mid = node_id("module", slugify(row["module"]))
+        g.add_node(Node(mid, "module", row["module"], path=row["path"], meta={"responsibility": row.get("responsibility", "")}))
+        g.add_edge(pid, mid, "contains")
+        prefix = row["path"].rstrip("/")
+        for f in files:
+            if f["path"] == prefix or f["path"].startswith(prefix + "/"):
+                g.add_edge(mid, node_id("file", f["path"]), "contains")
+        _link_edges(g, mid, row.get("links", ""), project_slug)
+    return g
+
+def build(vault_root, slug, project_dir=None):
+    """Full graph for one project. `project_dir` is accepted but unused — the code layer is read
+    from the vault's own `.brain/codelayer.json`, so other projects' graphs build without their repo."""
+    g = Graph()
+    build_vault_layer(g, vault_root, slug)
+    pdir = os.path.join(vault_root, "projects", slug)
+    layer = codemap.read_layer(pdir)
+    _, _, curated = codemap.split_codemap(vt.read(os.path.join(pdir, "codemap.md")))
+    build_code_layer(g, slug, layer, codemap.parse_modules(curated))
+    return g
+
+# ---------------------------------------------------------------- cache
+
+def inputs_mtime(vault_root, slug):
+    """Newest mtime across every file the graph is derived from. The cache itself lives in
+    `.brain/` and is deliberately not an input, so writing it cannot invalidate itself."""
+    pdir = os.path.join(vault_root, "projects", slug)
+    paths = [os.path.join(pdir, n) for n in ("context.md", "architecture.md", "codemap.md")] + [os.path.join(pdir, ".brain", "codelayer.json")]
+    cdir = os.path.join(vault_root, "concepts")
+    if os.path.isdir(cdir):
+        paths.append(cdir); paths += [os.path.join(cdir, f) for f in os.listdir(cdir)]
+    m = 0.0
+    for p in paths:
+        try:
+            m = max(m, os.path.getmtime(p))
+        except OSError:
+            pass
+    return m
+
+def load(vault_root, slug, project_dir=None, force=False):
+    """Cached build. Never raises: a missing/corrupt/stale cache falls back to a fresh build,
+    and a cache that cannot be written is not fatal."""
+    pdir = os.path.join(vault_root, "projects", slug)
+    cache = os.path.join(pdir, ".brain", "graph.json")
+    stamp = inputs_mtime(vault_root, slug)
+    if not force:
+        try:
+            with open(cache, encoding="utf-8") as f:
+                d = json.load(f)
+            if d.get("built_at", -1) >= stamp:
+                return Graph.from_dict(d["graph"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    g = build(vault_root, slug, project_dir)
+    try:
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        tmp = cache + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"built_at": stamp, "graph": g.to_dict()}, f)
+        os.replace(tmp, cache)
+    except OSError:
+        pass
+    return g
+
+# ---------------------------------------------------------------- queries
+
+FIND_LIMIT, NEAR_LIMIT, TOP_LIMIT = 15, 40, 12
+
+def _haystack(n):
+    base = os.path.basename(n.path or "")
+    return [(n.name or "").lower(), n.id.split(":", 1)[1].lower(), base.lower(), os.path.splitext(base)[0].lower()] + [a.lower() for a in n.aliases]
+
+def _score(n, term):
+    """3 = exact id/name/alias/filename match, 2 = prefix, 1 = substring (path included), 0 = no match."""
+    t = term.lower(); names = _haystack(n)
+    if t in names:
+        return 3
+    if any(x.startswith(t) for x in names):
+        return 2
+    if any(t in x for x in names + [(n.path or "").lower()]):
+        return 1
+    return 0
+
+def find(g, term, type=None, limit=FIND_LIMIT):
+    term = (term or "").strip()
+    if not term:
+        return []
+    scored = []
+    for n in g.nodes.values():
+        if type and n.type != type:
+            continue
+        s = _score(n, term)
+        if s:
+            scored.append((-s, -g.degree(n.id), n.id, n))
+    scored.sort(key=lambda x: x[:3])
+    return [x[3] for x in scored[:limit]]
+
+def path(g, a, b):
+    """Shortest undirected hop path a→b as node ids, [] if unreachable or unknown."""
+    if a not in g.nodes or b not in g.nodes:
+        return []
+    prev, q = {a: None}, deque([a])
+    while q:
+        cur = q.popleft()
+        if cur == b:
+            break
+        for other, _, _ in g.edges_of(cur):
+            if other not in prev:
+                prev[other] = cur; q.append(other)
+    if b not in prev:
+        return []
+    out, cur = [], b
+    while cur is not None:
+        out.append(cur); cur = prev[cur]
+    return list(reversed(out))
+
+def top(g, n=TOP_LIMIT, exclude=("file", "symbol")):
+    nodes = [x for x in g.nodes.values() if x.type not in exclude and not x.meta.get("external")]
+    nodes.sort(key=lambda x: (-g.degree(x.id), x.id))
+    return nodes[:n]
+
+# ---------------------------------------------------------------- renderers
+
+def _vault_root(g):
+    for n in g.nodes.values():
+        if n.type == "project" and n.meta.get("vault"):
+            return n.meta["vault"]
+    return ""
+
+def _short_path(g, n):
+    """Repo-relative for code nodes (already stored that way); vault-relative for vault notes."""
+    p = n.path or "-"
+    if p == "-" or n.type in ("file", "symbol", "module"):
+        return p
+    vault = _vault_root(g)
+    if not vault:
+        return p
+    try:
+        rel = os.path.relpath(p, vault)
+    except ValueError:
+        return p
+    return p if rel.startswith("..") else rel
+
+def _line(g, n):
+    return "%s %s  %s  — %s" % (n.type, n.id.split(":", 1)[1], _short_path(g, n), n.name)
+
+def render_find(g, nodes, limit=FIND_LIMIT):
+    return "".join(_line(g, n) + "\n" for n in nodes[:limit])
+
+def render_near(g, id, depth=1, limit=NEAR_LIMIT):
+    """Node header, then one line per incident edge grouped by (type, direction)."""
+    if id not in g.nodes:
+        return ""
+    n = g.nodes[id]
+    lines = [_line(g, n)]
+    if n.type == "section":
+        lines.append("  architecture.md § %s (line %s)" % (n.name, n.meta.get("line", "?")))
+    if n.meta.get("responsibility"):
+        lines.append("  %s" % n.meta["responsibility"])
+    groups = {}
+    for other, etype, direction in g.edges_of(id):
+        groups.setdefault((etype, direction), []).append(other)
+    for (etype, direction), others in sorted(groups.items()):
+        arrow = "→" if direction == "out" else "←"
+        for o in sorted(others, key=lambda x: (-g.degree(x), x)):
+            on = g.nodes[o]
+            lines.append("  %s %s %s %s  %s" % (etype, arrow, on.type, o.split(":", 1)[1], _short_path(g, on)))
+    if depth > 1:
+        for o, d in sorted(g.neighbors(id, depth).items(), key=lambda kv: (kv[1], kv[0])):
+            if d > 1:
+                lines.append("  ·· %s" % _line(g, g.nodes[o]))
+    return "\n".join(lines[:limit]) + "\n"
+
+def render_path(g, ids):
+    if not ids:
+        return ""
+    return " → ".join("%s %s" % (g.nodes[i].type, i.split(":", 1)[1]) for i in ids) + "\n"
+
+def render_top(g, nodes, limit=TOP_LIMIT):
+    return "".join("%s  (%d)\n" % (_line(g, n), g.degree(n.id)) for n in nodes[:limit])

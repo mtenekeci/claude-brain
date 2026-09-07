@@ -1,6 +1,6 @@
 import os, tempfile, unittest
-from tests.helpers import make_graph_vault, write_config
-from brain import graph
+from tests.helpers import make_graph_vault, make_project, make_source_tree, write_config
+from brain import codemap, graph
 
 class GraphModelTests(unittest.TestCase):
     def test_slugify_and_ids(self):
@@ -130,6 +130,85 @@ class GraphCarryOverTests(unittest.TestCase):
         self.assertIn("concept:auth-flow", g.nodes)
         self.assertEqual(g.nodes["concept:auth-flow"].name, "Auth Flow")
         self.assertIn(("section:demo/wiring", "concept:auth-flow", "uses"), {(e.src, e.dst, e.type) for e in g.edges})
+
+class CodeLayerAndQueryTests(unittest.TestCase):
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = make_graph_vault(self.tmp.name, slug="demo"); write_config(self.tmp.name, self.vault)
+        self.repo = make_project(self.tmp.name, slug="demo"); make_source_tree(self.repo)
+        self.pdir = os.path.join(self.vault, "projects", "demo")
+        codemap.ensure(self.repo, self.pdir)
+        cm = os.path.join(self.pdir, "codemap.md")
+        with open(cm, encoding="utf-8") as f: text = f.read()
+        text = text.replace("|---|---|---|---|\n", "|---|---|---|---|\n| Auth flow | src/auth/ | Session cookies + refresh | uses:: [[concepts/nextauth|NextAuth]] |\n", 1)
+        with open(cm, "w", encoding="utf-8") as f: f.write(text)
+        self.g = graph.build(self.vault, "demo", self.repo)
+    def tearDown(self):
+        self.tmp.cleanup(); os.environ.clear(); os.environ.update(self._env)
+
+    def test_code_layer_nodes_and_edges(self):
+        n = self.g.nodes
+        self.assertEqual(n["file:src/auth/session.ts"].name, "session.ts")
+        self.assertIn("symbol:src/auth/session.ts#SessionStore", n)
+        self.assertEqual(n["module:auth-flow"].path, "src/auth/")
+        types = {(e.src, e.dst, e.type) for e in self.g.edges}
+        self.assertIn(("file:src/auth/session.ts", "symbol:src/auth/session.ts#SessionStore", "contains"), types)
+        self.assertIn(("file:src/auth/session.ts", "file:src/db.ts", "imports"), types)
+        self.assertIn(("module:auth-flow", "file:src/auth/session.ts", "contains"), types)
+        self.assertIn(("module:auth-flow", "concept:nextauth", "uses"), types)
+        self.assertIn(("project:demo", "module:auth-flow", "contains"), types)
+
+    def test_build_tolerates_no_project_dir(self):
+        g = graph.build(self.vault, "demo", None)
+        self.assertIn("file:src/auth/session.ts", g.nodes); self.assertIn("module:auth-flow", g.nodes)
+
+    def test_find_ranks_exact_then_prefix_then_substring(self):
+        ids = [x.id for x in graph.find(self.g, "session")]
+        self.assertEqual(ids[0], "file:src/auth/session.ts")                      # name exact match
+        self.assertIn("symbol:src/auth/session.ts#SessionStore", ids)
+        self.assertEqual([x.id for x in graph.find(self.g, "pg")][0], "concept:postgresql")   # alias exact
+        self.assertEqual(graph.find(self.g, "zzz"), [])
+        self.assertTrue(all(x.type == "concept" for x in graph.find(self.g, "post", type="concept")))
+        self.assertLessEqual(len(graph.find(self.g, "s")), 15)
+
+    def test_path_and_top(self):
+        p = graph.path(self.g, "symbol:src/auth/session.ts#SessionStore", "concept:nextauth")
+        self.assertEqual(p[0], "symbol:src/auth/session.ts#SessionStore"); self.assertEqual(p[-1], "concept:nextauth"); self.assertLessEqual(len(p), 5)
+        self.assertEqual(graph.path(self.g, "concept:nextauth", "concept:zzz"), [])
+        top = graph.top(self.g, n=5)
+        self.assertEqual(top[0].id, "project:demo"); self.assertTrue(all(x.type not in ("file", "symbol") for x in top)); self.assertLessEqual(len(top), 5)
+
+    def test_renderers_respect_caps_and_shape(self):
+        out = graph.render_find(self.g, graph.find(self.g, "auth"))
+        self.assertLessEqual(out.count("\n"), 15); self.assertRegex(out.splitlines()[0], r"^\w+ \S+  \S+  — .+$")
+        near = graph.render_near(self.g, "module:auth-flow", depth=1)
+        self.assertLessEqual(near.count("\n"), 40); self.assertIn("contains →", near); self.assertIn("src/auth/session.ts", near); self.assertIn("uses → concept nextauth", near)
+        near2 = graph.render_near(self.g, "section:demo/auth", depth=1); self.assertIn("architecture.md § Auth (line 8)", near2)
+        self.assertEqual(graph.render_near(self.g, "nope:x"), "")
+        self.assertIn(" → ", graph.render_path(self.g, graph.path(self.g, "project:demo", "concept:postgresql")))
+        topo = graph.render_top(self.g, graph.top(self.g, n=12)); self.assertLessEqual(topo.count("\n"), 12)
+        big = graph.Graph(); big.add_node(graph.Node("project:p", "project", "p"))
+        for i in range(100):
+            big.add_node(graph.Node("concept:c%d" % i, "concept", "c%d" % i)); big.add_edge("project:p", "concept:c%d" % i, "uses")
+        self.assertEqual(graph.render_near(big, "project:p").count("\n"), 40)
+
+    def test_render_find_paths_are_vault_or_repo_relative(self):
+        line = graph.render_find(self.g, [self.g.nodes["section:demo/auth"]]).strip()
+        self.assertIn("projects/demo/architecture.md", line); self.assertNotIn(self.vault, line)
+        self.assertIn("src/auth/session.ts", graph.render_find(self.g, [self.g.nodes["file:src/auth/session.ts"]]))
+
+    def test_cache_roundtrip_and_invalidation(self):
+        g1 = graph.load(self.vault, "demo", self.repo)
+        cache = os.path.join(self.pdir, ".brain", "graph.json"); self.assertTrue(os.path.exists(cache))
+        m1 = os.path.getmtime(cache)
+        g2 = graph.load(self.vault, "demo", self.repo); self.assertEqual(os.path.getmtime(cache), m1); self.assertEqual(len(g2.nodes), len(g1.nodes))
+        import time; time.sleep(0.01)
+        with open(os.path.join(self.vault, "concepts", "redis.md"), "w") as f: f.write("---\nconcept: Redis\ntype: infra\n---\n# Redis\n\n## Used by\n- [[projects/demo/context|demo]] — cache\n")
+        g3 = graph.load(self.vault, "demo", self.repo); self.assertIn("concept:redis", g3.nodes)
+        with open(cache, "w") as f: f.write("{corrupt")
+        g4 = graph.load(self.vault, "demo", self.repo); self.assertIn("concept:redis", g4.nodes)
+        self.assertIn("concept:redis", graph.load(self.vault, "demo", self.repo, force=True).nodes)
 
 if __name__ == "__main__":
     unittest.main()
