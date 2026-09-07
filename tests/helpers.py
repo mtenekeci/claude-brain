@@ -82,3 +82,19 @@ def payload(event, cwd, session_id="s1", **kw):
          "transcript_path": "/dev/null", "permission_mode": "default"}
     d.update(kw)
     return d
+
+def make_graph_vault(tmp, slug="demo"):
+    """make_vault + two concept notes (one with aliases, one used by another project) + richer architecture.md."""
+    vault = make_vault(tmp, slug=slug)
+    cdir = os.path.join(vault, "concepts")
+    with open(os.path.join(cdir, "postgresql.md"), "w") as f:
+        f.write("---\nconcept: PostgreSQL\ntype: infra\nupdated: 2026-01-01\naliases: [Postgres, pg]\n---\n\n# PostgreSQL\n\nRelational store.\n\n## Used by\n- [[projects/%s/context|%s]] — primary store\n- [[projects/other/context|other]] — also\n" % (slug, slug))
+    with open(os.path.join(cdir, "nextauth.md"), "w") as f:
+        f.write("---\nconcept: NextAuth\ntype: library\nupdated: 2026-01-01\n---\n\n# NextAuth\n\nAuth library.\n\n## Used by\n- [[projects/other/context|other]] — sessions\n")
+    arch = os.path.join(vault, "projects", slug, "architecture.md")
+    with open(arch, "w") as f:
+        f.write("---\nproject: %s\ntype: architecture\n---\n\n# Arch\n\n## Auth\nSessions live in `src/auth/`. decided-by:: [[projects/%s/context#Decisions]]\nuses:: [[concepts/nextauth|NextAuth]]\n\n%s\n## not a heading\n%s\n\n## Storage\nAll DB calls go through `db.ts`; Postgres is the only store. see:: [[concepts/postgresql|PostgreSQL]]\n\n### Migrations\nRun with pg.\n" % (slug, slug, "`" * 3, "`" * 3))
+    ctx = os.path.join(vault, "projects", slug, "context.md")
+    with open(ctx, "a") as f:
+        f.write("\nuses:: [[concepts/postgresql|PostgreSQL]] [[concepts/missing-one|Missing]]\n")
+    return vault
