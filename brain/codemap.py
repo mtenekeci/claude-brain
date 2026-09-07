@@ -191,3 +191,7 @@ def read_layer(pdir):
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+def ensure(project_dir, pdir):
+    """Create codemap.md if missing. Placeholder until the renderer lands (next task): reports nothing created."""
+    return False
