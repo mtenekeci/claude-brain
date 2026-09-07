@@ -2,11 +2,12 @@ import json, os, tempfile, unittest
 from tests.helpers import make_vault, make_project, write_config, payload
 from brain import migrate, project, hooks, vault
 
-LEGACY_SETTINGS = {"permissions": {"allow": ["Read(~/x/**)"]}, "hooks": {
+LEGACY_SETTINGS = {"permissions": {"allow": ["Read(~/x/**)", "café"]}, "hooks": {
     "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "/Users/old/.claude/brain-session-start.sh"}]}],
     "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/Users/old/.claude/brain-post-tool-use.sh"}, {"type": "command", "command": "/keep/me.sh"}]}],
     "PreCompact": [{"matcher": "", "hooks": [{"type": "command", "command": "/Users/old/.claude/brain-precompact.sh"}]}],
-    "SessionEnd": [{"matcher": "", "hooks": [{"type": "command", "command": "/Users/old/.claude/brain-session-end.sh"}]}]}}
+    "SessionEnd": [{"matcher": "", "hooks": [{"type": "command", "command": "/Users/old/.claude/brain-session-end.sh"}]}],
+    "Notification": []}}
 
 class MigrationTests(unittest.TestCase):
     def setUp(self):
@@ -35,6 +36,9 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(s["permissions"], LEGACY_SETTINGS["permissions"])
         self.assertEqual([h["command"] for h in s["hooks"]["PostToolUse"][0]["hooks"]], ["/keep/me.sh"])
         self.assertNotIn("SessionStart", s["hooks"]); self.assertNotIn("PreCompact", s["hooks"])
+        self.assertIn("Notification", s["hooks"]); self.assertEqual(s["hooks"]["Notification"], [])  # untouched empty event survives
+        raw = open(self.settings, encoding="utf-8").read()
+        self.assertIn("café", raw)                                        # non-ascii preserved unescaped
         fm, _ = vault.parse_frontmatter(vault.read(os.path.join(self.vault, "projects", "old-app", "context.md")))
         self.assertEqual(fm["path"], self.repo)
         proj2 = project.resolve_project(self.repo)
@@ -70,6 +74,27 @@ class MigrationTests(unittest.TestCase):
         self.assertIn("Brain: migrated old-app to v2 layout", r.stdout)
         r2 = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         self.assertNotIn("migrated", r2.stdout)
+
+    def test_no_separator_backs_up_original(self):
+        claude_md = os.path.join(self.repo, "CLAUDE.md")
+        original = "# Brain: old-app\n\nvault: /Users/old/vault/projects/old-app\n\n## My notes\nDon't lose this.\n"
+        with open(claude_md, "w", encoding="utf-8") as f:
+            f.write(original)
+        proj = project.resolve_project(self.repo)
+        actions = migrate.migrate_project(proj, self.vault, self.repo)
+        backup_path = claude_md + ".brain-bak"
+        self.assertTrue(os.path.exists(backup_path))
+        with open(backup_path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), original)
+        self.assertEqual(vault.read(claude_md), migrate.slim_block("old-app", "old-app"))
+        self.assertTrue(any("backup" in a for a in actions))
+
+    def test_slim_block_matches_template(self):
+        template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "CLAUDE.md")
+        with open(template_path, encoding="utf-8") as f:
+            template = f.read()
+        rendered = template.replace("{project-name}", "N").replace("{slug}", "S")
+        self.assertEqual(rendered, migrate.slim_block("N", "S"))
 
 
 if __name__ == "__main__":
