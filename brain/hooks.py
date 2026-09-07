@@ -50,8 +50,6 @@ def resolve_ctx(payload):
 
 def dispatch(event, payload):
     try:
-        if os.environ.get("BRAIN_TEST_RAISE"):
-            raise RuntimeError("test")
         handler = _HANDLERS.get(event)
         if handler is None:
             return EMPTY
@@ -76,10 +74,14 @@ def _banner(title):
 def on_session_start(ctx):
     source = str(ctx.payload.get("source") or "startup")
     state.prune(days=7)
+    ctx.state.stop_blocks_this_turn = 0
     migrated_line = ""
     try:
-        from brain import migrate
-        if migrate.needs_migration(ctx.project, ctx.vault):
+        try:
+            from brain import migrate
+        except ImportError:         # module not installed yet — nothing to migrate
+            migrate = None
+        if migrate is not None and migrate.needs_migration(ctx.project, ctx.vault):
             actions = migrate.migrate_project(ctx.project, ctx.vault, ctx.project.project_dir)
             if actions:
                 ctx.project = project.resolve_project(ctx.project.project_dir) or ctx.project
@@ -107,7 +109,6 @@ def on_session_start(ctx):
             source, gitinfo.current_branch(ctx.cwd) or "?", expected)]
     if migrated_line:
         parts += ["", migrated_line]
-    ctx.state.stop_blocks_this_turn = 0
     return HookResult("\n".join(parts) + "\n")
 
 _HANDLERS = {

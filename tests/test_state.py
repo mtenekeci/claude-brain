@@ -3,9 +3,13 @@ from brain import state
 
 class StateTests(unittest.TestCase):
     def setUp(self):
+        self._env = dict(os.environ)
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["CLAUDE_PLUGIN_DATA"] = os.path.join(self.tmp.name, "data")
-    def tearDown(self): self.tmp.cleanup()
+
+    def tearDown(self):
+        os.environ.clear(); os.environ.update(self._env)
+        self.tmp.cleanup()
 
     def test_defaults_roundtrip(self):
         s = state.SessionState.load("abc")

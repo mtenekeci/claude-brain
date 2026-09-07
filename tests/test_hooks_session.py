@@ -4,11 +4,16 @@ from brain import hooks, state
 
 class SessionStartTests(unittest.TestCase):
     def setUp(self):
+        self._env = dict(os.environ)
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
         self.tmp = tempfile.TemporaryDirectory()
         self.vault = make_vault(self.tmp.name, slug="demo")
         write_config(self.tmp.name, self.vault)
         self.repo = make_project(self.tmp.name, slug="demo")
-    def tearDown(self): self.tmp.cleanup()
+
+    def tearDown(self):
+        os.environ.clear(); os.environ.update(self._env)
+        self.tmp.cleanup()
 
     def test_injects_protocol_context_and_last_log(self):
         r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo, source="startup"))
@@ -38,15 +43,46 @@ class SessionStartTests(unittest.TestCase):
         r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         self.assertEqual(r.stdout, "")
 
-    def test_exception_is_swallowed_and_logged(self):
-        os.environ["BRAIN_TEST_RAISE"] = "1"
+    def test_missing_context_md_points_at_init_and_still_resets_gate(self):
+        os.remove(os.path.join(self.vault, "projects", "demo", "context.md"))
+        with state.locked("s1") as s:
+            s.stop_blocks_this_turn = 3
+        r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        self.assertIn("has no context.md", r.stdout)
+        self.assertEqual(state.SessionState.load("s1").stop_blocks_this_turn, 0)
+
+    def test_handler_exception_is_swallowed_and_logged(self):
+        def boom(ctx):
+            raise RuntimeError("kaboom")
+        original = hooks._HANDLERS["SessionStart"]
+        hooks._HANDLERS["SessionStart"] = boom
         try:
             r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         finally:
-            del os.environ["BRAIN_TEST_RAISE"]
-        self.assertEqual((r.stdout, r.exit_code), ("", 0))
+            hooks._HANDLERS["SessionStart"] = original
+        self.assertEqual((r.stdout, r.json, r.exit_code), ("", None, 0))
         with open(os.path.join(os.environ["CLAUDE_PLUGIN_DATA"], "brain.log")) as f:
-            self.assertIn("SessionStart", f.read())
+            logged = f.read()
+        self.assertIn("SessionStart", logged)
+        self.assertIn("kaboom", logged)
+
+    def test_locked_failure_is_swallowed(self):
+        blocked = os.path.join(self.tmp.name, "blocked")
+        os.makedirs(blocked)
+        os.chmod(blocked, 0o500)
+        try:
+            target = os.path.join(blocked, "sub")
+            try:
+                os.makedirs(target)
+            except OSError:
+                pass                # expected: the data dir cannot be created
+            else:
+                self.skipTest("writes into a 0o500 directory succeed here (running as root?)")
+            os.environ["CLAUDE_PLUGIN_DATA"] = target
+            r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+            self.assertEqual((r.stdout, r.json, r.exit_code), ("", None, 0))
+        finally:
+            os.chmod(blocked, 0o700)
 
     def test_unknown_event_is_silent(self):
         r = hooks.dispatch("Bogus", payload("Bogus", self.repo))

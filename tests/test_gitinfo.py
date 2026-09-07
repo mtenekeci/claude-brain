@@ -3,6 +3,13 @@ from tests.helpers import make_project
 from brain import gitinfo
 
 class GitInfoTests(unittest.TestCase):
+    def setUp(self):
+        self._env = dict(os.environ)
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+
+    def tearDown(self):
+        os.environ.clear(); os.environ.update(self._env)
+
     def test_branch_sha_and_today(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_project(tmp)

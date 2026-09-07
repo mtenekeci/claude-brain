@@ -51,6 +51,10 @@ def write_config(tmp, vault, extra=None):
     with open(path, "w") as f: json.dump(cfg, f)
     os.environ["BRAIN_CONFIG"] = path
     os.environ["CLAUDE_PLUGIN_DATA"] = os.path.join(tmp, "data")
+    # A real Claude Code session exports CLAUDE_PROJECT_DIR, which project.resolve_project()
+    # consults before walking ancestors. Left set, it would resolve the *host* repo instead of
+    # the fixture. Every fixture that configures a vault also isolates this.
+    os.environ.pop("CLAUDE_PROJECT_DIR", None)
     return path
 
 def payload(event, cwd, session_id="s1", **kw):

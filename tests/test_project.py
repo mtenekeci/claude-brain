@@ -3,6 +3,13 @@ from tests.helpers import make_project
 from brain import project
 
 class ProjectTests(unittest.TestCase):
+    def setUp(self):
+        self._env = dict(os.environ)
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+
+    def tearDown(self):
+        os.environ.clear(); os.environ.update(self._env)
+
     def test_v2_brain_line(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_project(tmp, slug="demo", git=False)

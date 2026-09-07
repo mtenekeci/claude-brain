@@ -3,6 +3,13 @@ from tests.helpers import make_vault, write_config
 from brain import config
 
 class ConfigTests(unittest.TestCase):
+    def setUp(self):
+        self._env = dict(os.environ)
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+
+    def tearDown(self):
+        os.environ.clear(); os.environ.update(self._env)
+
     def test_vault_root_from_env_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = make_vault(tmp)
