@@ -1,4 +1,4 @@
-import os, tempfile, unittest
+import json, os, tempfile, unittest
 from tests.helpers import make_graph_vault, make_project, make_source_tree, write_config
 from brain import codemap, graph
 
@@ -112,6 +112,13 @@ class GraphCarryOverTests(unittest.TestCase):
         self.assertEqual(n.name, "Other Project"); self.assertEqual(n.path, "/v/projects/other/context.md")
         self.assertEqual(sorted(n.aliases), ["o", "op"])
 
+    def test_add_node_real_then_stub_stays_real(self):
+        g = graph.Graph()
+        g.add_node(graph.Node("project:demo", "project", "demo", path="/v/projects/demo/context.md"))
+        g.add_node(graph.Node("project:demo", "project", "demo", meta={"external": True}))
+        self.assertNotIn("external", g.nodes["project:demo"].meta)
+        self.assertIn("project:demo", [n.id for n in graph.top(g)])
+
     def test_add_edge_ignores_self_loops(self):
         g = graph.Graph(); g.add_node(graph.Node("project:demo", "project", "demo"))
         g.add_edge("project:demo", "project:demo", "links-to")
@@ -167,6 +174,12 @@ class CodeLayerAndQueryTests(unittest.TestCase):
         ids = [x.id for x in graph.find(self.g, "session")]
         self.assertEqual(ids[0], "file:src/auth/session.ts")                      # name exact match
         self.assertIn("symbol:src/auth/session.ts#SessionStore", ids)
+        # A symbol borrows its FILE's basename only at the substring tier: TTL is not a "session"
+        # match in any strong sense and must not tie with the file or outrank SessionStore.
+        self.assertEqual(graph._score(self.g.nodes["file:src/auth/session.ts"], "session"), 3)
+        self.assertEqual(graph._score(self.g.nodes["symbol:src/auth/session.ts#SessionStore"], "session"), 2)
+        self.assertEqual(graph._score(self.g.nodes["symbol:src/auth/session.ts#TTL"], "session"), 1)
+        self.assertLess(ids.index("symbol:src/auth/session.ts#SessionStore"), ids.index("symbol:src/auth/session.ts#TTL"))
         self.assertEqual([x.id for x in graph.find(self.g, "pg")][0], "concept:postgresql")   # alias exact
         self.assertEqual(graph.find(self.g, "zzz"), [])
         self.assertTrue(all(x.type == "concept" for x in graph.find(self.g, "post", type="concept")))
@@ -186,7 +199,10 @@ class CodeLayerAndQueryTests(unittest.TestCase):
         self.assertLessEqual(near.count("\n"), 40); self.assertIn("contains →", near); self.assertIn("src/auth/session.ts", near); self.assertIn("uses → concept nextauth", near)
         near2 = graph.render_near(self.g, "section:demo/auth", depth=1); self.assertIn("architecture.md § Auth (line 8)", near2)
         self.assertEqual(graph.render_near(self.g, "nope:x"), "")
+        self.assertIn("uses → concept nextauth  concepts/nextauth.md  — NextAuth", near)   # edge lines carry the name too
         self.assertIn(" → ", graph.render_path(self.g, graph.path(self.g, "project:demo", "concept:postgresql")))
+        self.assertEqual(graph.render_path(self.g, ["project:demo", "concept:nope"]), "")   # total, never raises
+        self.assertEqual(graph.render_path(self.g, []), "")
         topo = graph.render_top(self.g, graph.top(self.g, n=12)); self.assertLessEqual(topo.count("\n"), 12)
         big = graph.Graph(); big.add_node(graph.Node("project:p", "project", "p"))
         for i in range(100):
@@ -197,6 +213,20 @@ class CodeLayerAndQueryTests(unittest.TestCase):
         line = graph.render_find(self.g, [self.g.nodes["section:demo/auth"]]).strip()
         self.assertIn("projects/demo/architecture.md", line); self.assertNotIn(self.vault, line)
         self.assertIn("src/auth/session.ts", graph.render_find(self.g, [self.g.nodes["file:src/auth/session.ts"]]))
+
+    def test_cache_ns_precision_and_unusable_shapes(self):
+        graph.load(self.vault, "demo", self.repo)
+        cache = os.path.join(self.pdir, ".brain", "graph.json")
+        with open(cache, encoding="utf-8") as f: stamp = json.load(f)["built_at"]
+        self.assertIsInstance(stamp, int)                    # integer nanoseconds, not float seconds
+        arch = os.path.join(self.pdir, "architecture.md")
+        with open(arch, "a", encoding="utf-8") as f: f.write("\n## Zzz\nlate section\n")
+        os.utime(arch, ns=(stamp + 1, stamp + 1))            # exactly 1ns newer — float seconds round this away
+        self.assertIn("section:demo/zzz", graph.load(self.vault, "demo", self.repo).nodes)
+        # Valid JSON that is not a usable cache must fall back to a fresh build, not raise.
+        for bad in ("[]", '{"built_at": 1e18, "graph": null}'):
+            with open(cache, "w", encoding="utf-8") as f: f.write(bad)
+            self.assertIn("section:demo/zzz", graph.load(self.vault, "demo", self.repo).nodes)
 
     def test_cache_roundtrip_and_invalidation(self):
         g1 = graph.load(self.vault, "demo", self.repo)

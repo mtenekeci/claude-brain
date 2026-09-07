@@ -60,6 +60,8 @@ class Graph(object):
             if a not in cur.aliases:
                 cur.aliases.append(a)
         for k, v in node.meta.items():
+            if k == "external":
+                continue            # a stub arriving after the real note must not re-mark it external
             cur.meta.setdefault(k, v)
         return cur
     def record_dangling(self, src, target):
@@ -282,17 +284,22 @@ def build(vault_root, slug, project_dir=None):
 # ---------------------------------------------------------------- cache
 
 def inputs_mtime(vault_root, slug):
-    """Newest mtime across every file the graph is derived from. The cache itself lives in
-    `.brain/` and is deliberately not an input, so writing it cannot invalidate itself."""
+    """Newest mtime across every file the graph is derived from, in integer nanoseconds.
+
+    Nanoseconds, not float seconds: a same-second edit must invalidate the cache, and float
+    seconds round ties away. Ints also compare exactly after a JSON round-trip. A cache written
+    by an older float-seconds build stamps ~1e9 against a ~1e18 stamp, i.e. always stale — the
+    safe direction. The cache itself lives in `.brain/` and is deliberately not an input, so
+    writing it cannot invalidate itself."""
     pdir = os.path.join(vault_root, "projects", slug)
     paths = [os.path.join(pdir, n) for n in ("context.md", "architecture.md", "codemap.md")] + [os.path.join(pdir, ".brain", "codelayer.json")]
     cdir = os.path.join(vault_root, "concepts")
     if os.path.isdir(cdir):
         paths.append(cdir); paths += [os.path.join(cdir, f) for f in os.listdir(cdir)]
-    m = 0.0
+    m = 0
     for p in paths:
         try:
-            m = max(m, os.path.getmtime(p))
+            m = max(m, os.stat(p).st_mtime_ns)
         except OSError:
             pass
     return m
@@ -307,9 +314,10 @@ def load(vault_root, slug, project_dir=None, force=False):
         try:
             with open(cache, encoding="utf-8") as f:
                 d = json.load(f)
-            if d.get("built_at", -1) >= stamp:
+            # Valid JSON is not a valid cache: `[]` and `{"graph": null}` both parse fine.
+            if isinstance(d, dict) and isinstance(d.get("graph"), dict) and d.get("built_at", -1) >= stamp:
                 return Graph.from_dict(d["graph"])
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
     g = build(vault_root, slug, project_dir)
     try:
@@ -327,17 +335,26 @@ def load(vault_root, slug, project_dir=None, force=False):
 FIND_LIMIT, NEAR_LIMIT, TOP_LIMIT = 15, 40, 12
 
 def _haystack(n):
+    """(strong, weak) name lists. Strong names can score exact/prefix; weak ones only substring.
+
+    A symbol's basename/stem come from its *file*, not from itself — counting them as strong
+    would make every symbol in session.ts an exact hit for "session", outranking the file.
+    """
     base = os.path.basename(n.path or "")
-    return [(n.name or "").lower(), n.id.split(":", 1)[1].lower(), base.lower(), os.path.splitext(base)[0].lower()] + [a.lower() for a in n.aliases]
+    strong = [(n.name or "").lower(), n.id.split(":", 1)[1].lower()] + [a.lower() for a in n.aliases]
+    weak = [base.lower(), os.path.splitext(base)[0].lower(), (n.path or "").lower()]
+    if n.type != "symbol":
+        strong += weak[:2]
+    return strong, weak
 
 def _score(n, term):
     """3 = exact id/name/alias/filename match, 2 = prefix, 1 = substring (path included), 0 = no match."""
-    t = term.lower(); names = _haystack(n)
-    if t in names:
+    t = term.lower(); strong, weak = _haystack(n)
+    if t in strong:
         return 3
-    if any(x.startswith(t) for x in names):
+    if any(x.startswith(t) for x in strong):
         return 2
-    if any(t in x for x in names + [(n.path or "").lower()]):
+    if any(t in x for x in strong + weak):
         return 1
     return 0
 
@@ -424,7 +441,7 @@ def render_near(g, id, depth=1, limit=NEAR_LIMIT):
         arrow = "→" if direction == "out" else "←"
         for o in sorted(others, key=lambda x: (-g.degree(x), x)):
             on = g.nodes[o]
-            lines.append("  %s %s %s %s  %s" % (etype, arrow, on.type, o.split(":", 1)[1], _short_path(g, on)))
+            lines.append("  %s %s %s %s  %s  — %s" % (etype, arrow, on.type, o.split(":", 1)[1], _short_path(g, on), on.name))
     if depth > 1:
         for o, d in sorted(g.neighbors(id, depth).items(), key=lambda kv: (kv[1], kv[0])):
             if d > 1:
@@ -432,7 +449,7 @@ def render_near(g, id, depth=1, limit=NEAR_LIMIT):
     return "\n".join(lines[:limit]) + "\n"
 
 def render_path(g, ids):
-    if not ids:
+    if not ids or any(i not in g.nodes for i in ids):
         return ""
     return " → ".join("%s %s" % (g.nodes[i].type, i.split(":", 1)[1]) for i in ids) + "\n"
 
