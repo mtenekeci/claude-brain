@@ -42,34 +42,26 @@ def _heading_starts(text):
     return offsets
 
 def _section_span(text, heading):
-    target = "## %s" % heading
-    in_fence = False
+    offsets = _heading_starts(text)
+    target_heading = "## %s" % heading
+    start_idx = None
     char_pos = 0
-    start_pos = None
 
+    # Find the heading line that matches exactly
     for line in text.splitlines(keepends=True):
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-        elif not in_fence and line.startswith(target) and (line[len(target):].startswith("\n") or line[len(target):].startswith(" ")):
-            start_pos = char_pos + len(line)
-            break
+        if char_pos in offsets:
+            # This is a real heading line; check if it matches exactly
+            if line.rstrip("\r\n").rstrip() == target_heading:
+                start_idx = offsets.index(char_pos)
+                start_pos = char_pos + len(line)
+                break
         char_pos += len(line)
 
-    if start_pos is None:
+    if start_idx is None:
         return None
 
-    offsets = _heading_starts(text)
-    idx_in_offsets = None
-    for i, offset in enumerate(offsets):
-        if offset >= char_pos:
-            idx_in_offsets = i
-            break
-
-    if idx_in_offsets is None or idx_in_offsets >= len(offsets) - 1:
-        end = len(text)
-    else:
-        end = offsets[idx_in_offsets + 1]
+    # End at next heading or EOF
+    end = offsets[start_idx + 1] if start_idx + 1 < len(offsets) else len(text)
 
     return start_pos, end
 

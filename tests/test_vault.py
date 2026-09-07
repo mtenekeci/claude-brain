@@ -49,3 +49,9 @@ class VaultTests(unittest.TestCase):
         log = "## 2026-01-01 · Session 1\nCompleted: a\n\n## 2026-01-02 · Session 2\nSome text.\n```\n## bogus\n```\nmore.\nNext: —\n"
         self.assertEqual(vault.count_log_entries(log), 2)
         self.assertTrue(vault.last_log_entry(log).startswith("## 2026-01-02"))
+
+    def test_get_section_requires_exact_heading(self):
+        text = "## State of the Union\nX.\n\n## State\nY.\n"
+        self.assertEqual(vault.get_section(text, "State"), "Y.")
+        self.assertEqual(vault.get_section(text, "State of the Union"), "X.")
+        self.assertEqual(vault.get_section("## Stateful\nZ.\n", "State"), "")
