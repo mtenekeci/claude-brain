@@ -1,5 +1,5 @@
 {
-  "description": "claude-brain v2: vault injection and the enforcement gate. Plan 2 re-adds PreToolUse, SubagentStart and SubagentStop together with their handlers — only events with a handler in brain/hooks.py are registered here.",
+  "description": "claude-brain v2: vault injection, per-prompt retrieval, subagent briefing, enforcement gate",
   "hooks": {
     "SessionStart": [{"matcher": "startup|resume|compact|fork", "hooks": [{"type": "command", "timeout": 10, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SessionStart"}]}],
     "UserPromptSubmit": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook UserPromptSubmit"}]}],
@@ -7,6 +7,8 @@
     "Stop": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook Stop"}]}],
     "PreCompact": [{"hooks": [{"type": "command", "timeout": 10, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PreCompact"}]}],
     "SessionEnd": [{"hooks": [{"type": "command", "timeout": 1, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SessionEnd"}]}],
-    "PreToolUse": [{"matcher": "Bash|Grep|Glob", "hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PreToolUse"}]}]
+    "PreToolUse": [{"matcher": "Bash|Grep|Glob", "hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PreToolUse"}]}],
+    "SubagentStart": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SubagentStart"}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SubagentStop"}]}]
   }
 }
