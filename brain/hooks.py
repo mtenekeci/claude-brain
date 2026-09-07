@@ -91,7 +91,10 @@ def _banner(title):
 _REGEN_MIN_INTERVAL = 60.0
 
 def _spawn_regen(ctx, force=False):
-    """Fire-and-forget `map --regen` in a detached process. At most once per minute per session."""
+    """Fire-and-forget `map --regen` in a detached process. At most once per minute per session,
+    and never when the config disables background regeneration."""
+    if not config.async_regen():
+        return False
     now = time.time()
     if now - ctx.state.last_regen_spawn_at < _REGEN_MIN_INTERVAL:
         return False

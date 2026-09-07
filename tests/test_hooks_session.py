@@ -1,5 +1,5 @@
 import json, os, tempfile, unittest
-from tests.helpers import make_vault, make_project, write_config, payload, make_graph_vault, make_source_tree
+from tests.helpers import make_vault, make_project, write_config, payload, make_graph_vault, make_source_tree, stub_popen
 from brain import hooks, state
 
 class SessionStartTests(unittest.TestCase):
@@ -104,19 +104,6 @@ class SessionStartTests(unittest.TestCase):
         self.assertTrue(set(data["hooks"]) <= set(hooks._HANDLERS), set(data["hooks"]) - set(hooks._HANDLERS))
 
 
-def stub_popen(calls):
-    """Intercept only the detached `map --regen` spawn. subprocess.run() (gitinfo) resolves
-    Popen through the same module global, so real git calls must still reach the real Popen."""
-    orig = hooks.subprocess.Popen
-    def fake(*a, **k):
-        if a and "--regen" in list(a[0]):
-            calls.append(a)
-            return type("P", (), {"pid": 1})()
-        return orig(*a, **k)
-    hooks.subprocess.Popen = fake
-    return orig
-
-
 class SessionStartGraphTests(unittest.TestCase):
     def setUp(self):
         self._env = dict(os.environ)
@@ -138,6 +125,7 @@ class SessionStartGraphTests(unittest.TestCase):
         self.assertLessEqual(tail.count("\n"), 45 + 6)                             # +6 for the fixture log entry lines
 
     def test_large_repo_defers_regeneration(self):
+        write_config(self.tmp.name, self.vault, extra={"async_regen": True})
         calls = []
         orig_fc = hooks.codemap.file_count
         hooks.codemap.file_count = lambda d: 5000

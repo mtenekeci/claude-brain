@@ -20,6 +20,16 @@ class ConfigTests(unittest.TestCase):
         os.environ["BRAIN_CONFIG"] = "/nonexistent/brain.config"
         self.assertIsNone(config.vault_root())
 
+    def test_async_regen_defaults_true_and_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = make_vault(tmp)
+            write_config(tmp, vault, extra={"async_regen": True})
+            self.assertTrue(config.async_regen())
+            write_config(tmp, vault, extra={"async_regen": False})
+            self.assertFalse(config.async_regen())
+        os.environ["BRAIN_CONFIG"] = "/nonexistent/brain.config"
+        self.assertTrue(config.async_regen())        # no config file at all → default on
+
     def test_data_dir_created_and_log_error_appends(self):
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["CLAUDE_PLUGIN_DATA"] = os.path.join(tmp, "data")

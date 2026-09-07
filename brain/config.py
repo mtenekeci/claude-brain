@@ -22,6 +22,11 @@ def gate_mode():
     """'all' (default) | 'commits' | 'off' — Stop-gate setting (spec §7.7)."""
     return str(load_config().get("gate", "all"))
 
+def async_regen():
+    """False disables the detached codemap regeneration hooks spawn on SessionStart/source edits.
+    Default True; tests and users who want no background processes set "async_regen": false."""
+    return bool(load_config().get("async_regen", True))
+
 def data_dir():
     d = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.claude/brain-data")
     os.makedirs(d, exist_ok=True)

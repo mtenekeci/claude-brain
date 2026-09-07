@@ -46,7 +46,9 @@ def make_project(tmp, slug="demo", legacy=False, vault=None, git=True, extra_aft
     return repo
 
 def write_config(tmp, vault, extra=None):
-    cfg = {"vault": vault}
+    # async_regen off by default: no fixture may spawn a real detached `map --regen` process.
+    # The two tests that assert on the spawn re-enable it via extra={"async_regen": True}.
+    cfg = {"vault": vault, "async_regen": False}
     if extra: cfg.update(extra)
     path = os.path.join(tmp, "brain.config")
     with open(path, "w") as f: json.dump(cfg, f)
@@ -98,3 +100,17 @@ def make_graph_vault(tmp, slug="demo"):
     with open(ctx, "a") as f:
         f.write("\nuses:: [[concepts/postgresql|PostgreSQL]] [[concepts/missing-one|Missing]]\n")
     return vault
+
+def stub_popen(calls):
+    """Intercept only the detached `map --regen` spawn, recording its argv tuple in `calls`.
+    subprocess.run() (gitinfo) resolves Popen through the same module global, so every other
+    call must still reach the real Popen. Returns the original for restoration."""
+    from brain import hooks
+    orig = hooks.subprocess.Popen
+    def fake(*a, **k):
+        if a and "--regen" in list(a[0]):
+            calls.append(a)
+            return type("P", (), {"pid": 1})()
+        return orig(*a, **k)
+    hooks.subprocess.Popen = fake
+    return orig
