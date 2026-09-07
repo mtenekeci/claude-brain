@@ -8,6 +8,7 @@ from brain import graph
 
 STOP = set("the and for with that this from into what when where which how does your about have will just like also than then them they there their been were was are is it its of to in on at by an as or be do if we you can should would could please make sure".split())
 DONE_SIGNALS = ("thanks", "thank you", "done", "ship it", "looks good", "lgtm", "that's all", "close this", "bye", "good job", "perfect")
+_NEGATIONS = ("not", "isn't", "aren't", "don't", "never", "no")
 _SPAN_RE = re.compile(r"`([^`]+)`|\"([^\"]+)\"|'([^']{3,})'")
 _WORD_RE = re.compile(r"[A-Za-z_][\w./-]{3,}")
 
@@ -16,8 +17,20 @@ def is_system_prompt(prompt):
     return p.startswith("<") or p.startswith("/")
 
 def is_done_signal(prompt):
+    """A DONE_SIGNALS phrase on a word boundary, unless negated within 3 words before it
+    ("this isn't done yet" must not fire, but "thanks, ship it" must)."""
     p = (prompt or "").lower()
-    return len(p) < 80 and any(s in p for s in DONE_SIGNALS)
+    if len(p) >= 80:
+        return False
+    for sig in DONE_SIGNALS:
+        m = re.search(r"\b" + re.escape(sig) + r"\b", p)
+        if not m:
+            continue
+        before = re.findall(r"[\w']+", p[:m.start()])[-3:]
+        if any(w in _NEGATIONS for w in before):
+            continue
+        return True
+    return False
 
 def tokens(prompt, limit=12):
     out = []
@@ -56,57 +69,50 @@ def select(g, terms, already, max_nodes=3):
     return [n for _, _, n in ranked[:max_nodes]]
 
 def _neigh_lines(g, n):
-    lines = [graph._line(g, n)]
+    """[(line, [node ids that line names])] for one node's neighborhood. Every line is paired
+    with exactly the ids it puts in front of the user, so a caller that later truncates lines
+    (the 20-line render cap) can drop the matching ids too — dedup must track what was
+    actually shown, not everything that was merely *considered* (e.g. a module's 6th file,
+    never rendered because only files[:3] make the cut, must stay retrievable later)."""
+    out = [(graph._line(g, n), [n.id])]
     if n.meta.get("responsibility"):
-        lines.append("  %s" % n.meta["responsibility"])
+        out.append(("  %s" % n.meta["responsibility"], []))
     if n.type == "section":
-        lines.append("  architecture.md § %s (line %s)" % (n.name, n.meta.get("line", "?")))
+        out.append(("  architecture.md § %s (line %s)" % (n.name, n.meta.get("line", "?")), []))
     files, rels = [], {}
     for other, etype, direction in g.edges_of(n.id):
         on = g.nodes[other]
         if etype == "contains" and direction == "out" and on.type == "file":
             syms = [g.nodes[o].name for o, t, d in g.edges_of(other) if t == "contains" and d == "out"][:3]
-            files.append("%s%s" % (on.path, " (%s)" % ", ".join(syms) if syms else ""))
+            files.append((other, "%s%s" % (on.path, " (%s)" % ", ".join(syms) if syms else "")))
         elif etype in ("uses", "decided-by", "see", "depends-on", "implements", "imports") and direction == "out":
-            rels.setdefault(etype, []).append("%s %s" % (on.type, other.split(":", 1)[1]))
+            rels.setdefault(etype, []).append((other, "%s %s" % (on.type, other.split(":", 1)[1])))
         elif etype == "contains" and direction == "in" and on.type in ("module", "section"):
-            rels.setdefault("in", []).append("%s %s" % (on.type, other.split(":", 1)[1]))
+            rels.setdefault("in", []).append((other, "%s %s" % (on.type, other.split(":", 1)[1])))
     if files:
-        lines.append("  files: " + " · ".join(files[:3]))
+        shown = files[:3]
+        out.append(("  files: " + " · ".join(t for _, t in shown), [fid for fid, _ in shown]))
     for k in ("uses", "decided-by", "see", "depends-on", "implements", "imports", "in"):
         if k in rels:
-            lines.append("  %s: %s" % (k, ", ".join(rels[k][:4])))
-    return lines
+            shown = rels[k][:4]
+            out.append(("  %s: %s" % (k, ", ".join(t for _, t in shown)), [rid for rid, _ in shown]))
+    return out
 
-def mentioned_ids(g, nodes):
-    """Every node id that would appear in render()'s neighborhood text for `nodes` — the
-    selected nodes themselves plus their contained files/symbols and relation targets.
-    The hook folds these into the per-session dedup set, not just the top-level ids: a file
-    contained by an already-shown module still names that module via its own `in:` backlink
-    (see _neigh_lines), so without this a later turn re-selecting that file would silently
-    re-surface the module's context. Marking descendants as seen too keeps a session from
-    repeating the same neighborhood under a different node.
-    """
-    ids = set()
+def render_with_ids(g, nodes, limit=20):
+    """(text, ids) — ids is exactly the set of node ids whose line survived the `limit`-line
+    cap, for the hook to fold into its per-session dedup set."""
+    if not nodes:
+        return "", set()
+    pairs = [("Brain: graph hits for \"%s\" —" % ", ".join(n.name for n in nodes), [])]
     for n in nodes:
-        ids.add(n.id)
-        for other, etype, direction in g.edges_of(n.id):
-            on = g.nodes[other]
-            if etype == "contains" and direction == "out" and on.type == "file":
-                ids.add(other)
-                for o2, t2, d2 in g.edges_of(other):
-                    if t2 == "contains" and d2 == "out":
-                        ids.add(o2)
-            elif etype in ("uses", "decided-by", "see", "depends-on", "implements", "imports") and direction == "out":
-                ids.add(other)
-            elif etype == "contains" and direction == "in" and on.type in ("module", "section"):
-                ids.add(other)
-    return ids
+        pairs += _neigh_lines(g, n)
+    pairs = pairs[:limit]
+    text = "\n".join(p[0] for p in pairs) + "\n"
+    ids = set()
+    for _, line_ids in pairs:
+        ids.update(line_ids)
+    return text, ids
 
 def render(g, nodes, limit=20):
-    if not nodes:
-        return ""
-    lines = ["Brain: graph hits for \"%s\" —" % ", ".join(n.name for n in nodes)]
-    for n in nodes:
-        lines += _neigh_lines(g, n)
-    return "\n".join(lines[:limit]) + "\n"
+    text, _ = render_with_ids(g, nodes, limit)
+    return text

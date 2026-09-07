@@ -5,6 +5,7 @@ from brain import config, project, state, vault, gitinfo, graph, retrieve
 
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
 _SOFT_EDIT_THRESHOLD = 5        # soft-tier Stop gate: uncommitted source edits before nudging
+_INJECTED_CAP = 300             # bound on ctx.state.injected — a long session must not grow this file forever
 from brain.codemap import SOURCE_EXTS
 
 class HookResult(object):
@@ -266,6 +267,7 @@ def on_user_prompt_submit(ctx):
     if retrieve.is_system_prompt(prompt):
         return EMPTY
     s = ctx.state
+    already = set(s.injected)
     if retrieve.is_done_signal(prompt) and (s.commits_since_vault_write + s.source_edits_since_vault_write) > 0:
         return HookResult("Brain: user signalled done — write the log entry and update ## State / ## Active Work in %s now.\n" % ctx.context_path)
     terms = retrieve.tokens(prompt)
@@ -275,12 +277,14 @@ def on_user_prompt_submit(ctx):
         g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
     except Exception as e:
         config.log_error("retrieval graph load failed: %r" % e); return EMPTY
-    nodes = retrieve.select(g, terms, set(s.injected))
+    nodes = retrieve.select(g, terms, already)
     if not nodes:
         return EMPTY
-    already = set(s.injected)
-    s.injected = list(s.injected) + [i for i in retrieve.mentioned_ids(g, nodes) if i not in already]
-    return HookResult(retrieve.render(g, nodes))
+    text, ids = retrieve.render_with_ids(g, nodes)
+    if not text:
+        return EMPTY
+    s.injected = (list(already) + [i for i in ids if i not in already])[-_INJECTED_CAP:]
+    return HookResult(text)
 
 _HANDLERS["Stop"] = on_stop
 _HANDLERS["UserPromptSubmit"] = on_user_prompt_submit

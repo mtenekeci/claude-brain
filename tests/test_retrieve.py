@@ -12,6 +12,13 @@ class TokenTests(unittest.TestCase):
         self.assertFalse(retrieve.is_done_signal("please fix the login"))
         self.assertTrue(retrieve.is_system_prompt("<task-notification>x")); self.assertTrue(retrieve.is_system_prompt("/brain status")); self.assertFalse(retrieve.is_system_prompt("hello"))
 
+    def test_done_signal_is_word_bounded_and_negation_aware(self):
+        self.assertFalse(retrieve.is_done_signal("this isn't done yet, keep going"))
+        self.assertFalse(retrieve.is_done_signal("not done"))
+        self.assertTrue(retrieve.is_done_signal("thanks, ship it"))
+        self.assertTrue(retrieve.is_done_signal("done"))
+        self.assertFalse(retrieve.is_done_signal("abandoned"))
+
 class RetrieveTests(unittest.TestCase):
     def setUp(self):
         self._env = dict(os.environ)
@@ -47,3 +54,38 @@ class RetrieveTests(unittest.TestCase):
         s = state.SessionState.load("s1"); s.note_source_edit("/r/a.py"); s.save()
         r5 = hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo, prompt="thanks, looks good"))
         self.assertIn("write the log entry", r5.stdout)
+
+    def test_injected_list_is_capped(self):
+        s = state.SessionState.load("s1")
+        s.injected = ["dummy:%d" % i for i in range(300)]
+        s.save()
+        hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo, prompt="explain the auth flow"))
+        self.assertLessEqual(len(state.SessionState.load("s1").injected), 300)
+
+class DedupeTests(unittest.TestCase):
+    """render_with_ids must report exactly the ids it rendered — not every node considered —
+    so the hook's dedup set never starves a node the user never actually saw."""
+    def _six_file_module_graph(self):
+        g = graph.Graph()
+        g.add_node(graph.Node("project:demo", "project", "demo"))
+        g.add_node(graph.Node("module:auth-flow", "module", "Auth flow", path="src/auth/"))
+        g.add_edge("project:demo", "module:auth-flow", "contains")
+        names = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]
+        for name in names:
+            fid = "file:src/auth/%s.ts" % name
+            g.add_node(graph.Node(fid, "file", "%s.ts" % name, path="src/auth/%s.ts" % name))
+            g.add_edge("module:auth-flow", fid, "contains")
+        return g, names
+
+    def test_dedupe_tracks_only_rendered_nodes(self):
+        g, names = self._six_file_module_graph()
+        module = g.nodes["module:auth-flow"]
+        text, ids = retrieve.render_with_ids(g, [module])
+        rendered = {"file:src/auth/%s.ts" % n for n in names[:3]}
+        unrendered = {"file:src/auth/%s.ts" % n for n in names[3:]}
+        self.assertTrue(rendered <= ids)
+        self.assertFalse(ids & unrendered)
+        # a later prompt naming an unrendered file must still retrieve it
+        later = retrieve.select(g, retrieve.tokens("what about %s.ts" % names[3]), ids)
+        self.assertTrue(later)
+        self.assertEqual(later[0].id, "file:src/auth/%s.ts" % names[3])
