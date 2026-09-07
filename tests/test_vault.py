@@ -39,3 +39,13 @@ class VaultTests(unittest.TestCase):
             self.assertEqual(vault.read(p), "")
             vault.write(p, "a"); vault.append(p, "b")
             self.assertEqual(vault.read(p), "ab")
+
+    def test_headings_inside_code_fences_are_ignored(self):
+        text = "## Notes\nSome text.\n```\n## Fake\n```\nmore.\n\n## Next\nN.\n"
+        self.assertEqual(vault.get_section(text, "Notes"), "Some text.\n```\n## Fake\n```\nmore.")
+        self.assertEqual(vault.get_section(text, "Next"), "N.")
+
+    def test_log_helpers_ignore_fenced_headings(self):
+        log = "## 2026-01-01 · Session 1\nCompleted: a\n\n## 2026-01-02 · Session 2\nSome text.\n```\n## bogus\n```\nmore.\nNext: —\n"
+        self.assertEqual(vault.count_log_entries(log), 2)
+        self.assertTrue(vault.last_log_entry(log).startswith("## 2026-01-02"))

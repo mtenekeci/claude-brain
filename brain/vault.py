@@ -27,13 +27,51 @@ def set_frontmatter(text, key, value):
         block = block + "\n%s: %s" % (key, value)
     return "---\n%s\n---\n" % block + text[m.end():]
 
+def _heading_starts(text):
+    """Return character offsets of lines starting with '## ' outside code fences."""
+    offsets = []
+    in_fence = False
+    char_pos = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and line.startswith("## "):
+            offsets.append(char_pos)
+        char_pos += len(line)
+    return offsets
+
 def _section_span(text, heading):
-    m = re.search(r"^## %s\s*$\n" % re.escape(heading), text, re.M)
-    if not m:
+    target = "## %s" % heading
+    in_fence = False
+    char_pos = 0
+    start_pos = None
+
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and line.startswith(target) and (line[len(target):].startswith("\n") or line[len(target):].startswith(" ")):
+            start_pos = char_pos + len(line)
+            break
+        char_pos += len(line)
+
+    if start_pos is None:
         return None
-    nxt = re.search(r"^## ", text[m.end():], re.M)
-    end = m.end() + nxt.start() if nxt else len(text)
-    return m.end(), end
+
+    offsets = _heading_starts(text)
+    idx_in_offsets = None
+    for i, offset in enumerate(offsets):
+        if offset >= char_pos:
+            idx_in_offsets = i
+            break
+
+    if idx_in_offsets is None or idx_in_offsets >= len(offsets) - 1:
+        end = len(text)
+    else:
+        end = offsets[idx_in_offsets + 1]
+
+    return start_pos, end
 
 def get_section(text, heading):
     span = _section_span(text, heading)
@@ -49,11 +87,11 @@ def bullets(section_body):
     return [l[2:].strip() for l in section_body.splitlines() if l.startswith("- ")]
 
 def count_log_entries(text):
-    return len(re.findall(r"^## ", text, re.M))
+    return len(_heading_starts(text))
 
 def last_log_entry(text):
-    idx = [m.start() for m in re.finditer(r"^## ", text, re.M)]
-    return text[idx[-1]:].rstrip("\n") if idx else ""
+    offsets = _heading_starts(text)
+    return text[offsets[-1]:].rstrip("\n") if offsets else ""
 
 def last_entry_is_placeholder(text):
     head = last_log_entry(text).split("\n", 1)[0]
