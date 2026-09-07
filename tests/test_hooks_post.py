@@ -2,6 +2,19 @@ import os, subprocess, tempfile, unittest
 from tests.helpers import make_vault, make_project, write_config, payload
 from brain import hooks, state, vault
 
+def stub_popen(calls):
+    """Intercept only the detached `map --regen` spawn. subprocess.run() (gitinfo) resolves
+    Popen through the same module global, so real git calls must still reach the real Popen."""
+    orig = hooks.subprocess.Popen
+    def fake(*a, **k):
+        if a and "--regen" in list(a[0]):
+            calls.append(a)
+            return type("P", (), {"pid": 1})()
+        return orig(*a, **k)
+    hooks.subprocess.Popen = fake
+    return orig
+
+
 class PostToolUseTests(unittest.TestCase):
     def setUp(self):
         self._env = dict(os.environ)
@@ -104,3 +117,14 @@ class PostToolUseTests(unittest.TestCase):
             hooks.on_post_tool_use.prepare = pre; state.locked = orig
         self.assertTrue(seen["locked_after_prepare"])
         self.assertEqual(seen["pre"]["subject"], "feat: p"); self.assertEqual(len(seen["pre"]["sha"]), 40)
+
+    def test_source_edit_spawns_regen_at_most_once_per_minute(self):
+        calls = []
+        orig_popen = stub_popen(calls)
+        try:
+            for i in range(3):
+                self._post("Edit", file_path=os.path.join(self.repo, "src", "e%d.ts" % i), old_string="a", new_string="b")
+        finally:
+            hooks.subprocess.Popen = orig_popen
+        self.assertEqual(len(calls), 1)
+        s = state.SessionState.load("s1"); self.assertGreater(s.last_regen_spawn_at, 0)

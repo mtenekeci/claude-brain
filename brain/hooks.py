@@ -1,7 +1,7 @@
 """Hook handlers. dispatch() is the only entry point; each on_<event> returns a HookResult.
 Contract: never raise, never print outside brain projects."""
-import os, re, shlex, time, traceback
-from brain import config, project, state, vault, gitinfo
+import os, re, shlex, subprocess, sys, time, traceback
+from brain import codemap, config, graph, project, state, vault, gitinfo
 
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
 _SOFT_EDIT_THRESHOLD = 5        # soft-tier Stop gate: uncommitted source edits before nudging
@@ -88,27 +88,83 @@ def _protocol(ctx):
 def _banner(title):
     return "═" * 63 + "\n" + title + "\n" + "═" * 63 + "\n"
 
-def on_session_start(ctx):
-    source = str(ctx.payload.get("source") or "startup")
-    state.prune(days=7)
-    ctx.state.stop_blocks_this_turn = 0
-    migrated_line = ""
+_REGEN_MIN_INTERVAL = 60.0
+
+def _spawn_regen(ctx, force=False):
+    """Fire-and-forget `map --regen` in a detached process. At most once per minute per session."""
+    now = time.time()
+    if now - ctx.state.last_regen_spawn_at < _REGEN_MIN_INTERVAL:
+        return False
+    main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__main__.py")
+    argv = [sys.executable, main_py, "map", "--regen"] + (["--force"] if force else []) + ["--quiet"]
     try:
-        try:
-            from brain import migrate
-        except ImportError:         # module not installed yet — nothing to migrate
-            migrate = None
+        subprocess.Popen(argv, cwd=ctx.project.project_dir,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError as e:
+        config.log_error("spawn regen failed: %r" % e)
+        return False
+    ctx.state.last_regen_spawn_at = now
+    return True
+
+def _prepare_session_start(ctx):
+    """Everything slow or git-touching for SessionStart runs here, BEFORE the session lock."""
+    pre = {"migrated_line": "", "large": False, "top": "", "health": "", "head_sha": gitinfo.head_sha(ctx.cwd),
+           "log_entries": vault.count_log_entries(vault.read(ctx.log_path)), "branch": gitinfo.current_branch(ctx.cwd)}
+    try:
+        from brain import migrate
+    except ImportError:         # module not installed yet — nothing to migrate
+        migrate = None
+    try:
         if migrate is not None and migrate.needs_migration(ctx.project, ctx.vault):
             actions = migrate.migrate_project(ctx.project, ctx.vault, ctx.project.project_dir)
             if actions:
                 ctx.project = project.resolve_project(ctx.project.project_dir) or ctx.project
-                migrated_line = "Brain: migrated %s to v2 layout (%s). Run /brain sync once to reconcile concepts." % (ctx.project.slug, ", ".join(actions))
-    except Exception as e:          # migration must never suppress injection
+                pre["migrated_line"] = "Brain: migrated %s to v2 layout (%s). Run /brain sync once to reconcile concepts." % (ctx.project.slug, ", ".join(actions))
+    except Exception as e:      # migration must never suppress injection
         config.log_error("migration failed for %s: %r" % (ctx.project.slug, e))
+    try:
+        codemap.ensure(ctx.project.project_dir, ctx.pdir)
+        pre["large"] = codemap.file_count(ctx.project.project_dir) >= 3000
+        if not pre["large"]:
+            codemap.regenerate(ctx.project.project_dir, ctx.pdir)
+    except Exception as e:
+        config.log_error("codemap refresh failed: %r" % e)
+    try:
+        g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
+        pre["top"] = graph.render_top(g, graph.top(g, n=12)).rstrip("\n")
+        try:
+            from brain import lint                     # Task 11
+            pre["health"] = lint.health_line(lint.run(ctx.vault, ctx.project.slug, ctx.project.project_dir, g))
+        except ImportError:
+            pass
+    except Exception as e:
+        config.log_error("graph load failed: %r" % e)
+    return pre
+
+def _graph_lines(ctx):
+    lines = []
+    if ctx.pre.get("top"):
+        lines += ["", "Brain: most-connected nodes — `%s graph near <id>` for a neighborhood, `graph find <term>` before grepping code:" % cli_command(), ctx.pre["top"]]
+    if ctx.pre.get("health"):
+        lines += ["", ctx.pre["health"]]
+    return lines
+
+def on_session_start(ctx):
+    """Locked body: state mutation + output assembly only. All heavy work already ran in
+    _prepare_session_start(). context.md is read HERE (not in prepare) because lint's
+    auto-apply may have just rewritten it."""
+    source = str(ctx.payload.get("source") or "startup")
+    state.prune(days=7)
+    ctx.state.stop_blocks_this_turn = 0
+    migrated_line = ctx.pre.get("migrated_line", "")
     if ctx.state.log_entries_at_start < 0:
-        ctx.state.log_entries_at_start = vault.count_log_entries(vault.read(ctx.log_path))
+        ctx.state.log_entries_at_start = ctx.pre.get("log_entries", 0)
     if not ctx.state.last_head_sha:
-        ctx.state.last_head_sha = gitinfo.head_sha(ctx.cwd)
+        ctx.state.last_head_sha = ctx.pre.get("head_sha", "")
+    ctx.state.codemap_stale = bool(ctx.pre.get("large"))
+    if ctx.pre.get("large"):
+        _spawn_regen(ctx, force=True)
     parts = [_protocol(ctx).rstrip("\n"), ""]
     context_text = vault.read(ctx.context_path)
     if not context_text:
@@ -120,14 +176,17 @@ def on_session_start(ctx):
         parts += ["", _banner("VAULT FILE: %s (last entry only)" % ctx.log_path) + last]
     if os.path.exists(ctx.arch_path):
         parts += ["", "Tier 2 (read by section, on demand): " + ctx.arch_path]
+    parts += _graph_lines(ctx)
     if source in ("compact", "resume"):
         fm, _ = vault.parse_frontmatter(context_text)
         expected = fm.get("branch") or "unset"
         parts += ["", "Brain: context re-injected after %s; branch is %s (expected: %s)" % (
-            source, gitinfo.current_branch(ctx.cwd) or "?", expected)]
+            source, ctx.pre.get("branch") or "?", expected)]
     if migrated_line:
         parts += ["", migrated_line]
     return HookResult("\n".join(parts) + "\n")
+
+on_session_start.prepare = _prepare_session_start
 
 _READ_CMDS = ("cat", "sed", "head", "tail", "less", "bat", "more")
 # Deliberately permissive (matches `git commit --dry-run`, `git commit` in a message): the
@@ -222,6 +281,7 @@ def on_post_tool_use(ctx):
             ctx.state.note_vault_write()
         elif is_source_path(p) and under(p, ctx.project.project_dir):
             ctx.state.note_source_edit(p)
+            _spawn_regen(ctx)         # no --force: the fingerprint already reflects uncommitted edits
         return EMPTY
     return EMPTY
 
