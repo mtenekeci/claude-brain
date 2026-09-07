@@ -63,5 +63,22 @@ class LifecycleTests(unittest.TestCase):
         hooks.dispatch("SessionEnd", payload("SessionEnd", self.repo, reason="other"))
         self.assertEqual(vault.count_log_entries(vault.read(self.log)), 2)
 
+    def test_precompact_missing_log_reports_init(self):
+        os.remove(self.log)
+        r = hooks.dispatch("PreCompact", payload("PreCompact", self.repo))
+        self.assertIn("run /brain init", r.stdout)
+        self.assertNotIn("already exists", r.stdout)
+        self.assertFalse(os.path.exists(self.log))
+
+    def test_session_end_without_session_start_still_autocloses(self):
+        import subprocess
+        with open(os.path.join(self.repo, "c.py"), "a") as f: f.write("# feat: w\n")
+        subprocess.run(["git", "-C", self.repo, "add", "."], check=True)
+        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", "feat: w"], check=True)
+        hooks.dispatch("PostToolUse", payload("PostToolUse", self.repo, tool_name="Bash", tool_input={"command": "git commit -m x"}, tool_response={}))
+        hooks.dispatch("SessionEnd", payload("SessionEnd", self.repo, reason="other"))
+        text = vault.read(self.log)
+        self.assertIn("(auto-close)", text)
+
 if __name__ == "__main__":
     unittest.main()

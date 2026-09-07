@@ -219,7 +219,8 @@ def _append_entry(ctx, tag, with_git):
     text = vault.read(ctx.log_path)
     if not text or vault.last_entry_is_placeholder(text):
         return False
-    if tag == "auto-close" and vault.count_log_entries(text) != ctx.state.log_entries_at_start:
+    if (tag == "auto-close" and ctx.state.log_entries_at_start >= 0
+            and vault.count_log_entries(text) != ctx.state.log_entries_at_start):
         return False                       # a real entry (e.g. /brain sync) was already written this session
     n = vault.count_log_entries(text) + 1
     entry = vault.format_log_entry(time.strftime("%Y-%m-%d"), n, _completed_line(ctx), _changed_line(ctx, with_git), "none", "—", tag=tag)
@@ -227,6 +228,8 @@ def _append_entry(ctx, tag, with_git):
     return True
 
 def on_pre_compact(ctx):
+    if not vault.read(ctx.log_path):
+        return HookResult("BRAIN SYNC: no log.md for '%s' at %s — run /brain init before compacting.\n" % (ctx.project.slug, ctx.log_path))
     wrote = _append_entry(ctx, "pre-compact", with_git=True)
     if wrote:
         return HookResult("BRAIN SYNC: checkpoint written to %s. NOW fill in Completed and Decided with real session detail, then update ## State and ## Active Work in %s before the compact proceeds.\n" % (ctx.log_path, ctx.context_path))
