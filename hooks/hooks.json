@@ -6,6 +6,7 @@
     "PostToolUse": [{"matcher": "Bash|Read|Edit|Write|MultiEdit", "hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PostToolUse"}]}],
     "Stop": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook Stop"}]}],
     "PreCompact": [{"hooks": [{"type": "command", "timeout": 10, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PreCompact"}]}],
-    "SessionEnd": [{"hooks": [{"type": "command", "timeout": 1, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SessionEnd"}]}]
+    "SessionEnd": [{"hooks": [{"type": "command", "timeout": 1, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SessionEnd"}]}],
+    "PreToolUse": [{"matcher": "Bash|Grep|Glob", "hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PreToolUse"}]}]
   }
 }

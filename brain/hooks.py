@@ -1,7 +1,7 @@
 """Hook handlers. dispatch() is the only entry point; each on_<event> returns a HookResult.
 Contract: never raise, never print outside brain projects."""
 import os, re, shlex, time, traceback
-from brain import config, project, state, vault, gitinfo
+from brain import config, project, state, vault, gitinfo, graph
 
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
 _SOFT_EDIT_THRESHOLD = 5        # soft-tier Stop gate: uncommitted source edits before nudging
@@ -317,3 +317,114 @@ def on_session_end(ctx):
 
 _HANDLERS["PreCompact"] = on_pre_compact
 _HANDLERS["SessionEnd"] = on_session_end
+
+_PUSH_RE = re.compile(r"\bgit\s+push\b")
+_MAIN_RULE_RE = re.compile(r"never\s+.*commit.*\bto\b.*\b(main|master)\b", re.I)
+_PUSH_VALUE_OPTS = ("-o", "--push-option", "--receive-pack", "--exec")
+# git global options that can appear before the `push` subcommand and would otherwise hide it.
+_GIT_GLOBAL_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")
+_GIT_GLOBAL_FLAG_OPTS = ("--no-pager", "-P", "--no-optional-locks")
+_REDIR_RE = re.compile(r"^\d*[<>]{1,2}(&\d+)?$")
+
+def _is_redir(t):
+    return bool(_REDIR_RE.match(t)) or t in ("&>", "&>>")
+
+def push_targets(cmd, current_branch):
+    """Branch names a Bash command would push to. Parses real `git push` segments only (never quoted/echoed text)."""
+    targets = []
+    for seg in re.split(r"\|\||&&|[;|]", cmd or ""):
+        try:
+            toks = shlex.split(seg.strip(), comments=True)
+        except ValueError:
+            continue
+        while toks and toks[0] in ("env", "command", "sudo"):
+            toks = toks[1:]
+        if not toks or toks[0] != "git":
+            continue
+        idx = 1
+        while idx < len(toks) and toks[idx] != "push":
+            t = toks[idx]
+            if t in _GIT_GLOBAL_VALUE_OPTS:
+                idx += 2; continue
+            if any(t.startswith(p + "=") for p in _GIT_GLOBAL_VALUE_OPTS):
+                idx += 1; continue
+            if t in _GIT_GLOBAL_FLAG_OPTS:
+                idx += 1; continue
+            break
+        if idx >= len(toks) or toks[idx] != "push":
+            continue
+        positional, skip = [], False
+        for t in toks[idx + 1:]:
+            if skip:
+                skip = False; continue
+            if _is_redir(t):
+                if t.endswith(">") or t.endswith("<"):
+                    skip = True     # drop the redirection's filename too
+                continue
+            if t in _PUSH_VALUE_OPTS:
+                skip = True; continue
+            if t.startswith("-"):
+                continue
+            positional.append(t)
+        refspecs = positional[1:] if positional else []
+        names = []
+        for r in refspecs:
+            r = r.lstrip("+")
+            dst = r.split(":", 1)[1] if ":" in r else r
+            dst = current_branch if dst == "HEAD" else dst
+            names.append(dst[len("refs/heads/"):] if dst.startswith("refs/heads/") else dst)
+        if not refspecs:
+            names.append(current_branch)
+        for n in names:
+            if n and n not in targets:
+                targets.append(n)
+    return targets
+
+def _prepare_pre_tool_use(ctx):
+    ti = ctx.payload.get("tool_input") or {}
+    if str(ctx.payload.get("tool_name") or "") == "Bash" and _PUSH_RE.search(str(ti.get("command") or "")):
+        return {"branch": gitinfo.current_branch(ctx.cwd)}
+    return {}
+
+def _deny(reason):
+    return HookResult(json={"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}})
+
+def _search_term(pattern):
+    toks = [t.strip("./-") for t in re.sub(r"[^\w./-]+", " ", pattern or "").split()]
+    toks = [t for t in toks if len(t) >= 3]
+    return max(toks, key=len) if toks else ""
+
+def on_pre_tool_use(ctx):
+    tool = str(ctx.payload.get("tool_name") or ""); ti = ctx.payload.get("tool_input") or {}
+    if tool == "Bash":
+        cmd = str(ti.get("command") or "")
+        if not _PUSH_RE.search(cmd):
+            return EMPTY
+        targets = push_targets(cmd, ctx.pre.get("branch", ""))
+        if not targets:
+            return EMPTY
+        text = vault.read(ctx.context_path); fm, _ = vault.parse_frontmatter(text)
+        expected = fm.get("branch", "")
+        bad = [t for t in targets if expected and t != expected]
+        if bad:
+            return _deny("Brain: this push targets '%s' but ## Active Work expects '%s' (context.md frontmatter branch:). Confirm with the user or update context.md before pushing." % (bad[0], expected))
+        protected = [t for t in targets if t in ("main", "master")]
+        if protected and _MAIN_RULE_RE.search(vault.get_section(text, "Hard Rules")):
+            return _deny("Brain: Hard Rules forbid pushing directly to '%s'. Push a feature branch and open a PR." % protected[0])
+        return EMPTY
+    if tool in ("Grep", "Glob"):
+        term = _search_term(str(ti.get("pattern") or ""))
+        if not term:
+            return EMPTY
+        try:
+            g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
+        except Exception as e:
+            config.log_error("pretool graph load failed: %r" % e); return EMPTY
+        out = graph.render_find(g, graph.find(g, term, limit=9), limit=9)
+        if not out:
+            return EMPTY
+        return HookResult(json={"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "Brain: graph already knows —\n" + out.rstrip("\n")}})
+    return EMPTY
+
+on_pre_tool_use.prepare = _prepare_pre_tool_use
+_HANDLERS["PreToolUse"] = on_pre_tool_use
