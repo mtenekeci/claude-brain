@@ -321,6 +321,13 @@ _HANDLERS["SessionEnd"] = on_session_end
 _PUSH_RE = re.compile(r"\bgit\s+push\b")
 _MAIN_RULE_RE = re.compile(r"never\s+.*commit.*\bto\b.*\b(main|master)\b", re.I)
 _PUSH_VALUE_OPTS = ("-o", "--push-option", "--receive-pack", "--exec")
+# git global options that can appear before the `push` subcommand and would otherwise hide it.
+_GIT_GLOBAL_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")
+_GIT_GLOBAL_FLAG_OPTS = ("--no-pager", "-P", "--no-optional-locks")
+_REDIR_RE = re.compile(r"^\d*[<>]{1,2}(&\d+)?$")
+
+def _is_redir(t):
+    return bool(_REDIR_RE.match(t)) or t in ("&>", "&>>")
 
 def push_targets(cmd, current_branch):
     """Branch names a Bash command would push to. Parses real `git push` segments only (never quoted/echoed text)."""
@@ -332,12 +339,28 @@ def push_targets(cmd, current_branch):
             continue
         while toks and toks[0] in ("env", "command", "sudo"):
             toks = toks[1:]
-        if len(toks) < 2 or toks[0] != "git" or toks[1] != "push":
+        if not toks or toks[0] != "git":
+            continue
+        idx = 1
+        while idx < len(toks) and toks[idx] != "push":
+            t = toks[idx]
+            if t in _GIT_GLOBAL_VALUE_OPTS:
+                idx += 2; continue
+            if any(t.startswith(p + "=") for p in _GIT_GLOBAL_VALUE_OPTS):
+                idx += 1; continue
+            if t in _GIT_GLOBAL_FLAG_OPTS:
+                idx += 1; continue
+            break
+        if idx >= len(toks) or toks[idx] != "push":
             continue
         positional, skip = [], False
-        for t in toks[2:]:
+        for t in toks[idx + 1:]:
             if skip:
                 skip = False; continue
+            if _is_redir(t):
+                if t.endswith(">") or t.endswith("<"):
+                    skip = True     # drop the redirection's filename too
+                continue
             if t in _PUSH_VALUE_OPTS:
                 skip = True; continue
             if t.startswith("-"):
@@ -367,7 +390,8 @@ def _deny(reason):
     return HookResult(json={"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}})
 
 def _search_term(pattern):
-    toks = [t for t in re.sub(r"[^\w./-]+", " ", pattern or "").split() if len(t.strip("./-")) >= 3]
+    toks = [t.strip("./-") for t in re.sub(r"[^\w./-]+", " ", pattern or "").split()]
+    toks = [t for t in toks if len(t) >= 3]
     return max(toks, key=len) if toks else ""
 
 def on_pre_tool_use(ctx):

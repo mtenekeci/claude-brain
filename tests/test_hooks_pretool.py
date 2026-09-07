@@ -27,6 +27,12 @@ class PreToolUseTests(unittest.TestCase):
         self.assertEqual(pt("# git push origin main", "feat/x"), [])
         self.assertEqual(pt("git status | grep push", "feat/x"), [])
         self.assertEqual(pt("git push -o ci.skip origin feat/x", "feat/x"), ["feat/x"])
+        self.assertEqual(pt("git push origin feat/x 2>&1", "feat/x"), ["feat/x"])
+        self.assertEqual(pt("git push origin feat/x > log.txt 2>&1", "feat/x"), ["feat/x"])
+        self.assertEqual(pt("git push origin feat/x &> /dev/null", "feat/x"), ["feat/x"])
+        self.assertEqual(pt("git -C /x push origin main", "feat/x"), ["main"])
+        self.assertEqual(pt("git --no-pager -c core.x=1 push origin HEAD:main", "feat/x"), ["main"])
+        self.assertEqual(pt("git --git-dir=/x/.git push", "feat/x"), ["feat/x"])
 
     def test_push_guard_denies_mismatch_and_protected_main_by_target(self):
         # fixture Hard Rules contain "Never commit directly to `main`."; repo is on main
