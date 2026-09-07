@@ -1,8 +1,6 @@
 """Config + plugin data dir. Single source for paths every other module needs."""
 import json, os, time
 
-CONFIG_PATH = os.environ.get("BRAIN_CONFIG") or os.path.expanduser("~/.claude/brain.config")
-
 def _config_path():
     return os.environ.get("BRAIN_CONFIG") or os.path.expanduser("~/.claude/brain.config")
 
@@ -17,7 +15,8 @@ def load_config():
 
 def vault_root():
     v = load_config().get("vault")
-    return os.path.expanduser(v) if isinstance(v, str) and v else None
+    # realpath: every path comparison downstream (hooks.under) assumes a canonical vault root.
+    return os.path.realpath(os.path.expanduser(v)) if isinstance(v, str) and v else None
 
 def gate_mode():
     """'all' (default) | 'commits' | 'off' — Stop-gate setting (spec §7.7)."""

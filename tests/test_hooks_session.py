@@ -1,4 +1,4 @@
-import os, tempfile, unittest
+import json, os, tempfile, unittest
 from tests.helpers import make_vault, make_project, write_config, payload
 from brain import hooks, state
 
@@ -87,3 +87,22 @@ class SessionStartTests(unittest.TestCase):
     def test_unknown_event_is_silent(self):
         r = hooks.dispatch("Bogus", payload("Bogus", self.repo))
         self.assertEqual(r.stdout, "")
+
+    def test_payload_without_cwd_or_session_is_silent(self):
+        """Malformed payloads must never fall back to the ambient cwd or a shared session id."""
+        sessions = os.path.join(os.environ["CLAUDE_PLUGIN_DATA"], "sessions")
+        for bad in ({}, {"cwd": self.repo}, {"session_id": "s9"}, {"cwd": "", "session_id": "s9"},
+                    {"cwd": self.repo, "session_id": ""}, {"cwd": self.repo, "session_id": 5}, "not-a-dict"):
+            r = hooks.dispatch("SessionStart", bad)
+            self.assertEqual((r.stdout, r.json, r.exit_code), ("", None, 0), bad)
+        self.assertFalse(os.path.isdir(sessions) and os.listdir(sessions))
+
+    def test_hooks_json_registers_only_handled_events(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks", "hooks.json")
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(sorted(data["hooks"]), sorted(hooks._HANDLERS))
+
+
+if __name__ == "__main__":
+    unittest.main()

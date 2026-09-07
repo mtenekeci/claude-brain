@@ -1,4 +1,4 @@
-import json, os, tempfile, unittest
+import os, tempfile, unittest
 from tests.helpers import make_vault, make_project, write_config, payload
 from brain import hooks, state
 
@@ -36,7 +36,7 @@ class GateTests(unittest.TestCase):
         self.assertIsNone(hooks.gate_decision(s, "off", False, None, "Done."))
         s = state.SessionState("y")
         for i in range(5): s.note_source_edit("/r/%d.py" % i)
-        self.assertIn("5 uncommitted source edits", hooks.gate_decision(s, "all", False, None, "Done."))  # soft tier
+        self.assertIn("5 source edits", hooks.gate_decision(s, "all", False, None, "Done."))  # soft tier
         self.assertIsNone(hooks.gate_decision(s, "all", False, None, "Which option do you prefer?"))   # question suppresses
         self.assertIsNone(hooks.gate_decision(s, "commits", False, None, "Done."))                      # commits-only mode
         s2 = state.SessionState("z"); s2.note_source_edit("/r/a.py"); s2.note_source_edit("/r/b.py")
@@ -66,3 +66,32 @@ class GateTests(unittest.TestCase):
         self.assertEqual(self._stop().json["decision"], "block")
         hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo, prompt="go on"))
         self.assertIsNone(self._stop().json)     # counter reset by the block; needs 5 more edits
+
+    def test_symlinked_vault_releases_gate(self):
+        """Regression: a vault reached through a symlink must still match vault writes.
+        config.vault_root() and hooks.under() both realpath, so the real path is under it."""
+        link = os.path.join(self.tmp.name, "vaultlink")
+        os.symlink(self.vault, link)
+        write_config(self.tmp.name, link)
+        self._commit()
+        self.assertEqual(self._stop().json["decision"], "block")
+        hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo, prompt="go on"))  # new turn
+        real_context = os.path.join(self.vault, "projects", "demo", "context.md")   # REAL path, not the link
+        hooks.dispatch("PostToolUse", payload("PostToolUse", self.repo, tool_name="Edit",
+                                              tool_input={"file_path": real_context, "old_string": "a", "new_string": "b"},
+                                              tool_response={}))
+        self.assertIsNone(self._stop().json)
+
+    def test_task_notification_prompt_does_not_reset_the_gate(self):
+        """A background-subagent completion notice is not a user turn (spec §3/§7.2)."""
+        self._commit()
+        self.assertEqual(self._stop().json["decision"], "block")
+        hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo,
+                                                   prompt="<task-notification>agent x finished</task-notification>"))
+        self.assertIsNone(self._stop().json)          # same turn: still blocked once already
+        hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo, prompt="carry on"))
+        self.assertEqual(self._stop().json["decision"], "block")
+
+
+if __name__ == "__main__":
+    unittest.main()

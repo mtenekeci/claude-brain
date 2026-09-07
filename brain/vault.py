@@ -96,16 +96,16 @@ def format_log_entry(date, n, completed, changed, decided, nxt, tag=""):
 
 def read(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
     except (OSError, ValueError):
         return ""
 
 def write(path, text):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(text)
 
 def append(path, text):
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write(text)

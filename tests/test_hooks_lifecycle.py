@@ -80,5 +80,33 @@ class LifecycleTests(unittest.TestCase):
         text = vault.read(self.log)
         self.assertIn("(auto-close)", text)
 
+    def test_session_end_gives_up_instead_of_hanging_on_a_held_lock(self):
+        """SessionEnd runs against a 1 s hook timeout: it must never wait on the session lock."""
+        import fcntl
+        self._commit("feat: held")
+        holder = open(state.SessionState("s1").path + ".lock", "a")
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        try:
+            t0 = time.time()
+            r = hooks.dispatch("SessionEnd", payload("SessionEnd", self.repo, reason="other"))
+            self.assertLess(time.time() - t0, 1.0)
+        finally:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+            holder.close()
+        self.assertEqual((r.stdout, r.json, r.exit_code), ("", None, 0))     # silent, not a crash
+        with open(os.path.join(os.environ["CLAUDE_PLUGIN_DATA"], "brain.log"), encoding="utf-8") as f:
+            self.assertIn("lock busy", f.read())
+        self.assertNotIn("(auto-close)", vault.read(self.log))
+
+    def test_changed_line_truncates_at_a_space_never_mid_path(self):
+        for i in range(40):
+            self._edit(os.path.join(self.repo, "src", "a_very_long_directory_name_%02d" % i, "component.ts"))
+        hooks.dispatch("PreCompact", payload("PreCompact", self.repo))
+        changed = [l for l in vault.read(self.log).splitlines() if l.startswith("Changed: ")][-1][len("Changed: "):]
+        self.assertLessEqual(len(changed), 200)
+        self.assertGreater(len(changed), 150)                     # actually exercised the truncation
+        for token in changed.split(" "):
+            self.assertTrue(token.endswith("/component.ts"), token)
+
 if __name__ == "__main__":
     unittest.main()

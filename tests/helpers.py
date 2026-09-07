@@ -1,8 +1,9 @@
-import json, os, tempfile
+import json, os
 
 def make_vault(tmp, slug="demo", context_extra="", log_entries=None):
     """Create <tmp>/vault with _system/, concepts/, projects/<slug>/{context,architecture,log}.md."""
-    vault = os.path.join(tmp, "vault")
+    # realpath: brain canonicalises every path it stores, and macOS tmpdirs are symlinked.
+    vault = os.path.realpath(os.path.join(tmp, "vault"))
     proj = os.path.join(vault, "projects", slug)
     os.makedirs(os.path.join(vault, "_system"), exist_ok=True)
     os.makedirs(os.path.join(vault, "concepts"), exist_ok=True)
@@ -26,7 +27,7 @@ def make_vault(tmp, slug="demo", context_extra="", log_entries=None):
 
 def make_project(tmp, slug="demo", legacy=False, vault=None, git=True, extra_after_sep="# Repo notes\n"):
     """Create <tmp>/repo with CLAUDE.md (v2 `brain:` or legacy `vault:` line) and optionally a git repo."""
-    repo = os.path.join(tmp, "repo")
+    repo = os.path.realpath(os.path.join(tmp, "repo"))
     os.makedirs(os.path.join(repo, ".claude"), exist_ok=True)
     if legacy:
         head = "# Brain: %s\n\nvault: %s/projects/%s\n\n## Context protocol\nold text\n---\n" % (slug, vault, slug)

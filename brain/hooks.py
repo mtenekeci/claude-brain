@@ -1,9 +1,10 @@
 """Hook handlers. dispatch() is the only entry point; each on_<event> returns a HookResult.
 Contract: never raise, never print outside brain projects."""
-import os, re, shlex, sys, traceback
+import os, re, shlex, time, traceback
 from brain import config, project, state, vault, gitinfo
 
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
+_SOFT_EDIT_THRESHOLD = 5        # soft-tier Stop gate: uncommitted source edits before nudging
 SOURCE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".rb", ".java", ".kt", ".swift",
                ".vue", ".svelte", ".c", ".cpp", ".cs", ".php", ".scala", ".m", ".mm", ".h")
 
@@ -16,8 +17,8 @@ EMPTY = HookResult()
 class Ctx(object):
     def __init__(self, payload, proj, vault_root):
         self.payload = payload
-        self.session_id = str(payload.get("session_id") or "unknown")
-        self.cwd = payload.get("cwd") or os.getcwd()
+        self.session_id = str(payload["session_id"])   # resolve_ctx guarantees both are
+        self.cwd = str(payload["cwd"])                 # non-empty strings; no ambient fallback
         self.project = proj
         self.vault = vault_root
         self.pdir = project.vault_project_dir(vault_root, proj.slug)
@@ -27,6 +28,8 @@ class Ctx(object):
         self.state = None   # attached by dispatch() inside state.locked()
 
     def attach_state(self, s):
+        # Invariant: slug/vault/project_dir are back-filled exactly once per session and
+        # never change afterwards — later events reuse the identity the first event recorded.
         self.state = s
         if not s.slug:
             s.slug, s.vault, s.project_dir = self.project.slug, self.vault, self.project.project_dir
@@ -35,17 +38,24 @@ def cli_command():
     main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__main__.py")
     return 'python3 "%s"' % main_py
 
+def _nonempty_str(payload, key):
+    v = payload.get(key)
+    return v if isinstance(v, str) and v else None
+
 def resolve_ctx(payload):
+    """None unless the payload is a well-formed hook payload for a configured brain project.
+    A malformed payload must never fall back to the ambient cwd or a shared session id."""
+    if not isinstance(payload, dict):
+        return None
+    cwd = _nonempty_str(payload, "cwd")
+    if not cwd or not _nonempty_str(payload, "session_id"):
+        return None
     vault_root = config.vault_root()
     if not vault_root:
         return None
-    cwd = payload.get("cwd") or os.getcwd()
     proj = project.resolve_project(cwd)
     if proj is None:
         return None
-    if payload.get("agent_id"):
-        # inside a subagent: only SubagentStart/Stop-with-agent logic should ever act; handlers check this
-        pass
     return Ctx(payload, proj, vault_root)
 
 def dispatch(event, payload):
@@ -56,7 +66,9 @@ def dispatch(event, payload):
         ctx = resolve_ctx(payload)
         if ctx is None:
             return EMPTY
-        with state.locked(ctx.session_id) as s:
+        # SessionEnd runs against a 1 s hook timeout: never wait on a peer that holds the lock.
+        timeout = 0.5 if event == "SessionEnd" else None
+        with state.locked(ctx.session_id, timeout=timeout) as s:
             ctx.attach_state(s)
             result = handler(ctx)
         return result or EMPTY
@@ -95,7 +107,8 @@ def on_session_start(ctx):
     parts = [_protocol(ctx).rstrip("\n"), ""]
     context_text = vault.read(ctx.context_path)
     if not context_text:
-        return HookResult("Brain: project '%s' has no context.md at %s — run /brain init.\n" % (ctx.project.slug, ctx.pdir))
+        msg = "Brain: project '%s' has no context.md at %s — run /brain init.\n" % (ctx.project.slug, ctx.pdir)
+        return HookResult(migrated_line + "\n" + msg if migrated_line else msg)
     parts.append(_banner("VAULT FILE: " + ctx.context_path) + context_text.rstrip("\n"))
     last = vault.last_log_entry(vault.read(ctx.log_path))
     if last:
@@ -112,14 +125,19 @@ def on_session_start(ctx):
     return HookResult("\n".join(parts) + "\n")
 
 _READ_CMDS = ("cat", "sed", "head", "tail", "less", "bat", "more")
+# Deliberately permissive (matches `git commit --dry-run`, `git commit` in a message): the
+# real guard is on_post_tool_use's HEAD-moved check, which ignores commands that landed nothing.
 _COMMIT_RE = re.compile(r"\bgit\s+commit\b")
 
 def is_source_path(path):
     return bool(path) and path.lower().endswith(SOURCE_EXTS)
 
 def under(path, root):
+    """True when path is inside root. Both sides are realpath'd so a symlinked vault or
+    project root (e.g. /var -> /private/var on macOS) still compares equal."""
     try:
-        return os.path.commonpath([os.path.abspath(path), os.path.abspath(root)]) == os.path.abspath(root)
+        rroot = os.path.realpath(root)
+        return os.path.commonpath([os.path.realpath(path), rroot]) == rroot
     except ValueError:
         return False
 
@@ -202,12 +220,12 @@ def gate_decision(s, mode, stop_hook_active, agent_id, last_msg):
         return None
     k, m = s.commits_since_vault_write, s.source_edits_since_vault_write
     hard = k > 0
-    soft = mode == "all" and m >= 5 and not (last_msg or "").rstrip().endswith("?")
+    soft = mode == "all" and m >= _SOFT_EDIT_THRESHOLD and not (last_msg or "").rstrip().endswith("?")
     if not (hard or soft):
         return None
     what = []
     if k: what.append("%d commit%s" % (k, "" if k == 1 else "s"))
-    if m: what.append("%d uncommitted source edit%s" % (m, "" if m == 1 else "s"))
+    if m: what.append("%d source edit%s" % (m, "" if m == 1 else "s"))
     return ("Brain: this turn landed %s with no vault update. Edit ## State + ## Active Work in %s "
             "(and append a log.md entry if a task completed), then finish." % (" and ".join(what), "{context}"))
 
@@ -217,17 +235,19 @@ def on_stop(ctx):
     if reason is None:
         return EMPTY
     ctx.state.stop_blocks_this_turn = 1
-    if ctx.state.source_edits_since_vault_write >= 5:
+    if ctx.state.source_edits_since_vault_write >= _SOFT_EDIT_THRESHOLD:
         ctx.state.source_edits_since_vault_write = 0   # soft tier resets after firing (spec §7.7)
     return HookResult(json={"decision": "block", "reason": reason.replace("{context}", ctx.context_path)})
 
 def on_user_prompt_submit(ctx):
-    ctx.state.stop_blocks_this_turn = 0
+    # A <task-notification> prompt is a background-subagent completion notice, not a user
+    # turn (spec §3/§7.2) — it must not clear a block the current turn already earned.
+    if not str(ctx.payload.get("prompt") or "").lstrip().startswith("<task-notification>"):
+        ctx.state.stop_blocks_this_turn = 0
     return EMPTY   # Plan 2 adds per-prompt graph retrieval here
 
 _HANDLERS["Stop"] = on_stop
 _HANDLERS["UserPromptSubmit"] = on_user_prompt_submit
-import time
 
 def _rel(ctx, p):
     try:
@@ -239,7 +259,10 @@ def _changed_line(ctx, with_git):
     files = [_rel(ctx, p) for p in ctx.state.edited_files]
     if with_git:
         files += [f for f in gitinfo.changed_files_today(ctx.cwd) if f not in files]
-    line = " ".join(files)[:200]
+    line = " ".join(files)
+    if len(line) > 200:
+        cut = line.rfind(" ", 0, 200)          # never truncate mid-path
+        line = line[:cut] if cut > 0 else line[:200]
     return line or "—"
 
 def _completed_line(ctx):

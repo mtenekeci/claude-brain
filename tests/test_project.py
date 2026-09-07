@@ -59,3 +59,20 @@ class ProjectTests(unittest.TestCase):
             with open(os.path.join(tmp, "CLAUDE.md"), "wb") as f:
                 f.write(b"\xff\xfe# Brain\nbrain: x\n")
             self.assertIsNone(project.resolve_project(tmp))
+
+    def test_claude_md_with_leading_frontmatter_resolves(self):
+        """A leading YAML frontmatter block's closing `---` is not the brain-block separator."""
+        with tempfile.TemporaryDirectory() as tmp:
+            text = "---\ntitle: notes\ntags: [x]\n---\n\n# Brain: demo\n\nbrain: demo\n---\n# Repo notes\n"
+            with open(os.path.join(tmp, "CLAUDE.md"), "w", encoding="utf-8") as f:
+                f.write(text)
+            p = project.resolve_project(tmp)
+            self.assertIsNotNone(p)
+            self.assertEqual((p.slug, p.legacy), ("demo", False))
+            head, rest = project.split_brain_block(text)
+            self.assertTrue(head.endswith("brain: demo\n---\n"))
+            self.assertEqual(rest, "# Repo notes\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

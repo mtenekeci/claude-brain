@@ -78,3 +78,25 @@ class StateTests(unittest.TestCase):
             lock_fd.close()
         state.prune(days=7)
         self.assertFalse(os.path.exists(s.path + ".lock"))
+
+    def test_locked_timeout_raises_when_held(self):
+        import fcntl
+        lock_path = state.SessionState("x").path + ".lock"
+        holder = open(lock_path, "a")
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        try:
+            t0 = time.time()
+            with self.assertRaises(BlockingIOError):
+                with state.locked("x", timeout=0.2):
+                    self.fail("lock should not have been acquired")
+            self.assertLess(time.time() - t0, 0.5)
+        finally:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+            holder.close()
+        with state.locked("x", timeout=0.2) as s:      # released: same call now succeeds
+            s.reads = 7
+        self.assertEqual(state.SessionState.load("x").reads, 7)
+
+
+if __name__ == "__main__":
+    unittest.main()

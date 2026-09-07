@@ -27,17 +27,24 @@ class MigrationTests(unittest.TestCase):
     def test_migrates_claude_md_settings_and_path(self):
         proj = project.resolve_project(self.repo)
         self.assertTrue(migrate.needs_migration(proj, self.vault))
+        original = vault.read(os.path.join(self.repo, "CLAUDE.md"))
         actions = migrate.migrate_project(proj, self.vault, self.repo)
-        self.assertIn("claude-md", actions); self.assertIn("hooks:4", actions); self.assertIn("path", actions)
+        self.assertTrue(any("claude-md" in a for a in actions), actions)
+        self.assertIn("hooks:4", actions); self.assertIn("path", actions)
+        backup = os.path.join(self.repo, "CLAUDE.md.brain-bak")          # backed up even with a separator
+        self.assertTrue(os.path.exists(backup))
+        with open(backup, encoding="utf-8") as f:
+            self.assertEqual(f.read(), original)
+        self.assertTrue(any("CLAUDE.md.brain-bak" in a for a in actions), actions)
         text = vault.read(os.path.join(self.repo, "CLAUDE.md"))
         self.assertIn("brain: old-app", text); self.assertNotIn("vault:", text)
         self.assertTrue(text.endswith("---\n# Repo notes\n"))            # content after separator preserved
-        s = json.load(open(self.settings))
+        with open(self.settings, encoding="utf-8") as f: s = json.load(f)
         self.assertEqual(s["permissions"], LEGACY_SETTINGS["permissions"])
         self.assertEqual([h["command"] for h in s["hooks"]["PostToolUse"][0]["hooks"]], ["/keep/me.sh"])
         self.assertNotIn("SessionStart", s["hooks"]); self.assertNotIn("PreCompact", s["hooks"])
         self.assertIn("Notification", s["hooks"]); self.assertEqual(s["hooks"]["Notification"], [])  # untouched empty event survives
-        raw = open(self.settings, encoding="utf-8").read()
+        with open(self.settings, encoding="utf-8") as f: raw = f.read()
         self.assertIn("café", raw)                                        # non-ascii preserved unescaped
         fm, _ = vault.parse_frontmatter(vault.read(os.path.join(self.vault, "projects", "old-app", "context.md")))
         self.assertEqual(fm["path"], self.repo)
@@ -49,7 +56,7 @@ class MigrationTests(unittest.TestCase):
         data = {"hooks": {"PostToolUse": ["not-a-dict", {"hooks": "not-a-list"}, {"hooks": [{"type": "command", "command": "/Users/old/.claude/brain-post-tool-use.sh"}]}]}}
         with open(self.settings, "w") as f: json.dump(data, f)
         self.assertEqual(migrate.strip_legacy_hooks(self.settings), 1)
-        s = json.load(open(self.settings))
+        with open(self.settings, encoding="utf-8") as f: s = json.load(f)
         self.assertEqual(s["hooks"]["PostToolUse"], ["not-a-dict", {"hooks": "not-a-list"}])
 
     def test_migration_failure_does_not_suppress_injection(self):
@@ -67,7 +74,7 @@ class MigrationTests(unittest.TestCase):
         raw = '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/x.sh"}]}]}}'
         with open(self.settings, "w") as f: f.write(raw)
         self.assertEqual(migrate.strip_legacy_hooks(self.settings), 0)
-        self.assertEqual(open(self.settings).read(), raw)
+        with open(self.settings, encoding="utf-8") as f: self.assertEqual(f.read(), raw)
 
     def test_session_start_runs_migration_and_reports_once(self):
         r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
@@ -87,7 +94,13 @@ class MigrationTests(unittest.TestCase):
         with open(backup_path, encoding="utf-8") as f:
             self.assertEqual(f.read(), original)
         self.assertEqual(vault.read(claude_md), migrate.slim_block("old-app", "old-app"))
-        self.assertTrue(any("backup" in a for a in actions))
+        self.assertTrue(any("backed up to CLAUDE.md.brain-bak — review it for your own notes" in a for a in actions), actions)
+
+    def test_missing_context_md_still_reports_the_migration(self):
+        os.remove(os.path.join(self.vault, "projects", "old-app", "context.md"))
+        r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        self.assertIn("Brain: migrated old-app to v2 layout", r.stdout)
+        self.assertIn("has no context.md", r.stdout)
 
     def test_slim_block_matches_template(self):
         template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "CLAUDE.md")

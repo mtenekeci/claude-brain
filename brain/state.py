@@ -84,13 +84,31 @@ class SessionState(object):
         self.commits_since_vault_write = 0
         self.source_edits_since_vault_write = 0
 
+def _acquire(lock, timeout):
+    """Blocking flock when timeout is None; otherwise poll LOCK_NB until the deadline
+    and raise BlockingIOError. Callers on a hard deadline (SessionEnd) pass a timeout so
+    a stuck peer can never hang the hook."""
+    if timeout is None:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        return
+    deadline = time.time() + timeout
+    while True:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except (OSError, BlockingIOError):
+            if time.time() >= deadline:
+                raise BlockingIOError("lock busy")
+            time.sleep(0.05)
+
 @contextlib.contextmanager
-def locked(session_id):
-    """Exclusive read-modify-write of one session's state. Holds the lock for the whole block."""
+def locked(session_id, timeout=None):
+    """Exclusive read-modify-write of one session's state. Holds the lock for the whole block.
+    With timeout set, raises BlockingIOError instead of waiting indefinitely."""
     probe = SessionState(session_id)
     lock_path = probe.path + ".lock"
     with open(lock_path, "a") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        _acquire(lock, timeout)
         try:
             s = SessionState.load(session_id)
             s.discard = False

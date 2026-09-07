@@ -11,18 +11,29 @@ class Project(object):
         self.project_dir = project_dir
         self.claude_md = claude_md
 
+_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n.*?^---[ \t]*$\n?", re.S | re.M)
+
+def body_start(text):
+    """Offset just past a leading YAML frontmatter block, or 0. The closing '---' of
+    frontmatter is not the brain-block separator, so every separator search skips it."""
+    m = _FRONTMATTER_RE.match(text)
+    return m.end() if m else 0
+
 def split_brain_block(text):
     """Return (brain_block, rest). brain_block runs from the top through the first
-    line that is exactly '---' (inclusive, with its newline). If no separator, block = whole text."""
-    m = re.search(r"^---\s*$\n?", text, re.M)
+    line that is exactly '---' (inclusive, with its newline), ignoring a leading YAML
+    frontmatter block. If no separator, block = whole text."""
+    start = body_start(text)
+    m = re.compile(r"^---\s*$\n?", re.M).search(text, start)
     if not m:
         return text, ""
     return text[:m.end()], text[m.end():]
 
 def _from_dir(d):
+    d = os.path.realpath(d)     # canonical project_dir: hooks.under() compares realpaths
     path = os.path.join(d, "CLAUDE.md")
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             text = f.read()
     except (OSError, ValueError):
         return None
@@ -43,8 +54,8 @@ def resolve_project(cwd):
         p = _from_dir(env_dir)
         if p:
             return p
-    home = os.path.expanduser("~")
-    d = os.path.abspath(cwd)
+    home = os.path.realpath(os.path.expanduser("~"))
+    d = os.path.realpath(cwd)
     while True:
         if d != home:
             p = _from_dir(d)

@@ -1,5 +1,4 @@
 import os, tempfile, unittest
-from tests.helpers import make_vault
 from brain import vault
 
 CTX = "---\nproject: demo\nupdated: 2026-01-01\n---\n\n## State\nA.\n\n## Active Work\nB.\n\n## Decisions\n- **X (d)**: y\n- plain\n"

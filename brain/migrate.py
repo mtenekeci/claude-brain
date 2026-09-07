@@ -17,7 +17,7 @@ def _display_name(head, slug):
     return slug
 
 def _has_separator(text):
-    return bool(_SEP_RE.search(text))
+    return bool(_SEP_RE.search(text, project.body_start(text)))   # frontmatter's closing --- is not it
 
 def strip_legacy_hooks(settings_path):
     try:
@@ -76,15 +76,16 @@ def migrate_project(proj, vault_root, project_dir):
     if proj.legacy:
         text = vault.read(proj.claude_md)
         head, rest = project.split_brain_block(text)
+        # Always back the original up verbatim before rewriting: migration is one-shot and the
+        # brain block can hold hand-written notes we have no way to distinguish from boilerplate.
+        vault.write(proj.claude_md + ".brain-bak", text)
+        note = ""
         if not rest and not _has_separator(text):
             # No `---` separator: split_brain_block treated the whole file as the brain block,
-            # so anything below it would otherwise be silently dropped. Back it up verbatim first.
-            vault.write(proj.claude_md + ".brain-bak", text)
-            vault.write(proj.claude_md, slim_block(_display_name(head, proj.slug), proj.slug))
-            actions.append("claude-md:backup (original saved to CLAUDE.md.brain-bak — review it for your own notes)")
-        else:
-            vault.write(proj.claude_md, slim_block(_display_name(head, proj.slug), proj.slug) + rest)
-            actions.append("claude-md")
+            # so anything below it would otherwise be silently dropped.
+            note = " — review it for your own notes"
+        vault.write(proj.claude_md, slim_block(_display_name(head, proj.slug), proj.slug) + rest)
+        actions.append("claude-md (original backed up to CLAUDE.md.brain-bak%s)" % note)
     n = strip_legacy_hooks(os.path.join(project_dir, ".claude", "settings.json"))
     if n:
         actions.append("hooks:%d" % n)
