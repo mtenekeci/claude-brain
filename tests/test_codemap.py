@@ -121,6 +121,18 @@ class CodemapRenderTests(unittest.TestCase):
         self.assertIn("big/  (200 files, collapsed)", out)
         self.assertIn("small/a.ts  (a)", out)
 
+    def test_render_generated_reports_omitted_files(self):
+        files = [{"path": "d%03d/a.ts" % i, "lines": 1, "symbols": ["a"], "imports": []} for i in range(200)]
+        layer = {"sha": "x", "files": files, "deps": [], "generated_at": 0}
+        cap = 40
+        out = codemap.render_generated(layer, cap=cap)
+        lines = out.rstrip("\n").split("\n")
+        self.assertLessEqual(len(lines), cap)
+        self.assertIn("more files not shown", lines[-1])
+        header_len, budget = 4, cap - 4 - 1
+        omitted = len(files) - (budget - 1)
+        self.assertIn(str(omitted), lines[-1])
+
     def test_split_and_render_codemap_preserve_curated(self):
         curated = "## Modules\n| module | path | responsibility | links |\n|---|---|---|---|\n| auth | src/auth/ | sessions | [[concepts/nextauth]] |\n\n## Where to look\n| question | path |\n|---|---|\n| where are sessions? | src/auth/session.ts |\n"
         layer = codemap.build_layer(self.repo)
@@ -162,3 +174,16 @@ class CodemapRenderTests(unittest.TestCase):
     def test_regenerate_tolerates_missing_codemap(self):
         self.assertTrue(codemap.regenerate(self.repo, self.pdir, force=True))
         self.assertTrue(os.path.exists(os.path.join(self.pdir, "codemap.md")))
+
+    def test_ensure_writes_atomically(self):
+        calls = []
+        real_replace = os.replace
+        def fake_replace(src, dst):
+            calls.append((src, dst)); real_replace(src, dst)
+        os.replace = fake_replace
+        try:
+            self.assertTrue(codemap.ensure(self.repo, self.pdir))
+        finally:
+            os.replace = real_replace
+        codemap_calls = [c for c in calls if c[0].endswith("codemap.md.tmp")]
+        self.assertEqual(len(codemap_calls), 1)

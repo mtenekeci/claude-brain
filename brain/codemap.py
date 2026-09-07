@@ -258,7 +258,10 @@ def render_generated(layer, cap=150):
     for g in sorted(collapsed):
         body.append("%s/  (%d files, collapsed)" % (g, len(groups[g])))
     body.sort()
-    return "\n".join(header + body[:budget]) + "\n"
+    if len(body) > budget:
+        omitted = len(body) - (budget - 1)
+        body = body[:budget - 1] + ["… (%d more files not shown — see .brain/codelayer.json)" % omitted]
+    return "\n".join(header + body) + "\n"
 
 def render_codemap(layer, curated):
     return gen_start(layer.get("sha") or "") + "\n" + render_generated(layer) + GEN_END + "\n\n" + curated.lstrip("\n")
@@ -276,8 +279,10 @@ def ensure(project_dir, pdir):
     layer = build_layer(project_dir)
     write_layer(pdir, layer)
     slug = os.path.basename(pdir.rstrip("/"))
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write(render_codemap(layer, curated_template(slug)))
+    os.replace(tmp, path)
     return True
 
 def regenerate(project_dir, pdir, force=False):
