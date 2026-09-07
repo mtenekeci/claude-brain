@@ -5,8 +5,7 @@ from brain import config, project, state, vault, gitinfo
 
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
 _SOFT_EDIT_THRESHOLD = 5        # soft-tier Stop gate: uncommitted source edits before nudging
-SOURCE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".rb", ".java", ".kt", ".swift",
-               ".vue", ".svelte", ".c", ".cpp", ".cs", ".php", ".scala", ".m", ".mm", ".h")
+from brain.codemap import SOURCE_EXTS
 
 class HookResult(object):
     def __init__(self, stdout="", json=None, exit_code=0):
