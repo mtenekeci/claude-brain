@@ -1,7 +1,7 @@
 """Hook handlers. dispatch() is the only entry point; each on_<event> returns a HookResult.
 Contract: never raise, never print outside brain projects."""
 import os, re, shlex, time, traceback
-from brain import config, project, state, vault, gitinfo, graph
+from brain import config, project, state, vault, gitinfo, graph, briefing
 
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
 _SOFT_EDIT_THRESHOLD = 5        # soft-tier Stop gate: uncommitted source edits before nudging
@@ -428,3 +428,19 @@ def on_pre_tool_use(ctx):
 
 on_pre_tool_use.prepare = _prepare_pre_tool_use
 _HANDLERS["PreToolUse"] = on_pre_tool_use
+
+def on_subagent_start(ctx):
+    if not ctx.payload.get("agent_id"):
+        return EMPTY
+    return HookResult(json={"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": briefing.text(ctx)}})
+
+def on_subagent_stop(ctx):
+    msg = str(ctx.payload.get("last_assistant_message") or "")
+    if "Vault notes:" not in msg:
+        return EMPTY
+    who = str(ctx.payload.get("agent_type") or "subagent")
+    return HookResult(json={"hookSpecificOutput": {"hookEventName": "SubagentStop", "additionalContext":
+        "Brain: subagent '%s' reported vault notes — fold them into %s / codemap.md ## Modules now (a concept note only if you'd link it from more than one place)." % (who, ctx.arch_path)}})
+
+_HANDLERS["SubagentStart"] = on_subagent_start
+_HANDLERS["SubagentStop"] = on_subagent_stop
