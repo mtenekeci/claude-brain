@@ -227,3 +227,51 @@ def on_user_prompt_submit(ctx):
 
 _HANDLERS["Stop"] = on_stop
 _HANDLERS["UserPromptSubmit"] = on_user_prompt_submit
+import time
+
+def _rel(ctx, p):
+    try:
+        return os.path.relpath(p, ctx.project.project_dir)
+    except ValueError:
+        return p
+
+def _changed_line(ctx, with_git):
+    files = [_rel(ctx, p) for p in ctx.state.edited_files]
+    if with_git:
+        files += [f for f in gitinfo.changed_files_today(ctx.cwd) if f not in files]
+    line = " ".join(files)[:200]
+    return line or "—"
+
+def _completed_line(ctx):
+    return "; ".join(ctx.state.commit_subjects) if ctx.state.commit_subjects else "—"
+
+def _append_entry(ctx, tag, with_git):
+    text = vault.read(ctx.log_path)
+    if not text or vault.last_entry_is_placeholder(text):
+        return False
+    if (tag == "auto-close" and ctx.state.log_entries_at_start >= 0
+            and vault.count_log_entries(text) != ctx.state.log_entries_at_start):
+        return False                       # a real entry (e.g. /brain sync) was already written this session
+    n = vault.count_log_entries(text) + 1
+    entry = vault.format_log_entry(time.strftime("%Y-%m-%d"), n, _completed_line(ctx), _changed_line(ctx, with_git), "none", "—", tag=tag)
+    vault.append(ctx.log_path, entry)
+    return True
+
+def on_pre_compact(ctx):
+    if not vault.read(ctx.log_path):
+        return HookResult("BRAIN SYNC: no log.md for '%s' at %s — run /brain init before compacting.\n" % (ctx.project.slug, ctx.log_path))
+    wrote = _append_entry(ctx, "pre-compact", with_git=True)
+    if wrote:
+        return HookResult("BRAIN SYNC: checkpoint written to %s. NOW fill in Completed and Decided with real session detail, then update ## State and ## Active Work in %s before the compact proceeds.\n" % (ctx.log_path, ctx.context_path))
+    return HookResult("BRAIN SYNC: a checkpoint already exists in %s — enrich its Completed/Decided fields, then update context.md.\n" % ctx.log_path)
+
+def on_session_end(ctx):
+    s = ctx.state
+    if s.commits + s.source_edits + s.vault_writes > 0:
+        _append_entry(ctx, "auto-close", with_git=False)
+    s.discard = True
+    s.delete()
+    return EMPTY
+
+_HANDLERS["PreCompact"] = on_pre_compact
+_HANDLERS["SessionEnd"] = on_session_end
