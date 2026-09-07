@@ -27,8 +27,11 @@ def load_dismissed(pdir):
 def dismiss(pdir, slug):
     d = load_dismissed(pdir)
     d.add(slug)
-    with open(os.path.join(_brain_dir(pdir), "dismissed.json"), "w", encoding="utf-8") as f:
+    path = os.path.join(_brain_dir(pdir), "dismissed.json")
+    tmp = path + ".tmp"                             # atomic: a torn write here silently un-dismisses
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"candidates": sorted(d)}, f, indent=1)
+    os.replace(tmp, path)
 
 def _concepts(g):
     """Concept nodes, sorted by id — Node has no ordering, and matching must be deterministic."""
@@ -98,9 +101,12 @@ def apply_auto(vault_root, slug, concept_slug, name, note, add_link):
         wrote = True
     return wrote
 
-def _edit_distance(a, b):
-    if abs(len(a) - len(b)) > 2:
-        return 99                                   # cheap reject: cannot be within 2 edits
+SHORT_SLUG = 6
+
+def _edit_distance(a, b, cap):
+    """Levenshtein, but only accurate up to `cap` — anything further returns `cap + 1`."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1                              # cheap reject: cannot be within `cap` edits
     prev = list(range(len(b) + 1))
     for i, ca in enumerate(a, 1):
         cur = [i]
@@ -109,14 +115,26 @@ def _edit_distance(a, b):
         prev = cur
     return prev[-1]
 
-def _duplicates(g):
-    """Concept pairs that share an identity key or sit within 2 edits of each other."""
+def _near_threshold(sa, sb):
+    """Edits allowed before two slugs count as near-duplicates, relative to the shorter one.
+
+    A flat 2 is far too loose on short names: `jest`/`jwt` and `next`/`nuxt` are 2 apart and
+    entirely unrelated. Below `SHORT_SLUG` chars a single edit is all the evidence there is.
+    """
+    return 1 if min(len(sa), len(sb)) < SHORT_SLUG else 2
+
+def duplicates(g):
+    """Concept pairs that share an identity key or sit within a length-relative edit distance.
+
+    O(n²) over concepts, so it is computed only for the CLI report — never on the hook path.
+    """
     concepts = _concepts(g)
     out = []
     for i, a in enumerate(concepts):
         for b in concepts[i + 1:]:
             sa, sb = a.id.split(":", 1)[1], b.id.split(":", 1)[1]
-            if (_concept_keys(a) & _concept_keys(b)) or _edit_distance(sa, sb) <= 2:
+            cap = _near_threshold(sa, sb)
+            if (_concept_keys(a) & _concept_keys(b)) or _edit_distance(sa, sb, cap) <= cap:
                 out.append(tuple(sorted((sa, sb))))
     return sorted(set(out))
 
@@ -127,12 +145,18 @@ def _project_slugs(vault_root):
     except OSError:
         return []
 
-def run(vault_root, slug, project_dir, g, all_projects=False):
+def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=False):
+    """Reconcile concepts for `slug` (or every project). Auto-applies manifest-dep links.
+
+    `duplicates` is left empty unless `want_duplicates` — it is an O(n²) scan that only the CLI
+    report displays, and `run()` is on the SessionStart path. `render()` fills it in on demand
+    from `_graph`; the underscore marks it as an in-process handle, not part of the result data.
+    """
     slugs = _project_slugs(vault_root) if all_projects else [slug]
     if slug not in slugs:
         slugs = [slug] + slugs
     result = {"auto_applied": [], "candidates": [], "stale": [], "dangling": [],
-              "duplicates": _duplicates(g), "projects": slugs}
+              "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs, "_graph": g}
     for s in slugs:
         # Other projects build from their own vault dir; build()/load() tolerate project_dir=None
         # because the code layer is read from the vault's codelayer.json, not the repo.
@@ -140,11 +164,14 @@ def run(vault_root, slug, project_dir, g, all_projects=False):
         pdir = os.path.join(vault_root, "projects", s)
         pid = graph.node_id("project", s)
         typed = typed_targets(gg, s)
+        dismissed = load_dismissed(pdir)
         layer = codemap.read_layer(pdir) or {}
         dep_matches = match_deps_to_concepts(layer.get("deps", []), gg)
         dep_concepts = set(dep_matches.values())
         for dep, cid in sorted(dep_matches.items()):
             n = gg.nodes[cid]
+            if cid.split(":", 1)[1] in dismissed:
+                continue        # dismissal is a standing "no" — auto-apply edits shared concept notes
             try:
                 wrote = apply_auto(vault_root, s, cid.split(":", 1)[1], n.name,
                                    "dependency `%s`" % dep, add_link=(cid not in typed))
@@ -154,7 +181,6 @@ def run(vault_root, slug, project_dir, g, all_projects=False):
             if wrote:
                 result["auto_applied"].append(cid.split(":", 1)[1])
             typed.add(cid)                          # written or already there: the link now exists
-        dismissed = load_dismissed(pdir)
         mentioned = {e.dst for e in gg.edges if e.src == pid and e.type == "mentions"}
         for cid in sorted(mentioned - typed - dep_concepts):
             cslug = cid.split(":", 1)[1]
@@ -195,8 +221,10 @@ def render(res):
     if res.get("dangling"):
         lines.append("dangling links:")
         lines += ["  - %s → [[%s]]" % (d[0], d[1]) for d in res["dangling"][:DANGLING_RENDER_LIMIT]]
-    if res.get("duplicates"):
-        lines.append("possible duplicate concepts: " + ", ".join("%s ~ %s" % d for d in res["duplicates"]))
+    # run() skips the O(n²) duplicate scan; pay for it here, where it is actually displayed.
+    dups = res.get("duplicates") or (duplicates(res["_graph"]) if res.get("_graph") is not None else [])
+    if dups:
+        lines.append("possible duplicate concepts: " + ", ".join("%s ~ %s" % d for d in dups))
     if len(lines) == 1:
         lines.append("clean")
     return "\n".join(lines[:RENDER_LINE_LIMIT]) + "\n"

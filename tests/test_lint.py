@@ -58,11 +58,43 @@ class LintTests(unittest.TestCase):
         self.assertEqual(lint.health_line({"candidates": [], "stale": [], "dangling": [], "auto_applied": [], "duplicates": [], "projects": ["demo"]}), "")
         out = lint.render(res); self.assertIn("kafka", out); self.assertLessEqual(out.count("\n"), 40)
 
+    def _concept(self, slug, name):
+        with open(os.path.join(self.vault, "concepts", slug + ".md"), "w") as f:
+            f.write("---\nconcept: %s\ntype: infra\n---\n# %s\n\n## Used by\n" % (name, name))
+
     def test_duplicates_by_alias_overlap_or_edit_distance(self):
-        with open(os.path.join(self.vault, "concepts", "postgres.md"), "w") as f:
-            f.write("---\nconcept: Postgres\ntype: infra\n---\n# Postgres\n\n## Used by\n")
-        res = lint.run(self.vault, "demo", self.repo, graph.load(self.vault, "demo", self.repo, force=True))
+        self._concept("postgres", "Postgres")
+        g = graph.load(self.vault, "demo", self.repo, force=True)
+        res = lint.run(self.vault, "demo", self.repo, g, want_duplicates=True)
         self.assertIn(("postgres", "postgresql"), res["duplicates"])
+
+    def test_duplicates_are_lazy_and_render_fills_them_in(self):
+        self._concept("postgres", "Postgres")
+        g = graph.load(self.vault, "demo", self.repo, force=True)
+        res = lint.run(self.vault, "demo", self.repo, g)                 # default: no O(n^2) scan
+        self.assertEqual(res["duplicates"], [])
+        self.assertIn(("postgres", "postgresql"), lint.duplicates(g))    # still available on demand
+        self.assertIn("postgres ~ postgresql", lint.render(res))         # render pays for it itself
+        self.assertEqual(lint.health_line(res), lint.health_line(dict(res, duplicates=[])))
+
+    def test_near_duplicate_threshold_is_length_relative(self):
+        self._concept("jwt", "JWT")                                      # jest/jwt: 2 edits, both short
+        self._concept("mssql", "MSSQL"); self._concept("mysql", "MySQL")  # 5 chars, 1 edit
+        self._concept("postgres", "Postgres")
+        d = lint.duplicates(graph.load(self.vault, "demo", self.repo, force=True))
+        self.assertNotIn(("jest", "jwt"), d)
+        self.assertIn(("mssql", "mysql"), d)
+        self.assertIn(("postgres", "postgresql"), d)
+
+    def test_dismissed_concept_is_not_auto_applied(self):
+        lint.dismiss(self.pdir, "jest")
+        res = lint.run(self.vault, "demo", self.repo, self.g)
+        self.assertNotIn("jest", res["auto_applied"])
+        self.assertEqual(res["auto_applied"], ["nextauth"])               # other deps still applied
+        ctx = vault.read(os.path.join(self.pdir, "context.md"))
+        self.assertNotIn("concepts/jest", ctx)                            # no uses:: line
+        self.assertNotIn("projects/demo/context", vault.get_section(      # shared note left alone
+            vault.read(os.path.join(self.vault, "concepts", "jest.md")), "Used by"))
 
     def test_session_start_health_line(self):
         r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
