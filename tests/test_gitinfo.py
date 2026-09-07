@@ -16,6 +16,7 @@ class GitInfoTests(unittest.TestCase):
             self.assertEqual(gitinfo.current_branch(repo), "main")
             self.assertEqual(len(gitinfo.head_sha(repo)), 40)
             self.assertEqual(gitinfo.commits_today(repo), ["init"])
+            self.assertEqual(gitinfo.last_subject(repo), "init")
             with open(os.path.join(repo, "b.py"), "w") as f: f.write("x=1\n")
             files = gitinfo.changed_files_today(repo)
             self.assertIn("a.py", files); self.assertIn("b.py", files)
@@ -25,6 +26,7 @@ class GitInfoTests(unittest.TestCase):
             self.assertEqual(gitinfo.current_branch(tmp), "")
             self.assertEqual(gitinfo.commits_today(tmp), [])
             self.assertEqual(gitinfo.changed_files_today(tmp), [])
+            self.assertEqual(gitinfo.last_subject(tmp), "")
 
     def test_rename_yields_new_path(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,6 +1,6 @@
 """Hook handlers. dispatch() is the only entry point; each on_<event> returns a HookResult.
 Contract: never raise, never print outside brain projects."""
-import os, re, shlex, subprocess, sys, traceback
+import os, re, shlex, sys, traceback
 from brain import config, project, state, vault, gitinfo
 
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
@@ -112,7 +112,7 @@ def on_session_start(ctx):
     return HookResult("\n".join(parts) + "\n")
 
 _READ_CMDS = ("cat", "sed", "head", "tail", "less", "bat", "more")
-_COMMIT_RE = re.compile(r"(?:^|[;&|]\s*)git\s+commit\b(?![^;&|]*--dry-run)")
+_COMMIT_RE = re.compile(r"\bgit\s+commit\b")
 
 def is_source_path(path):
     return bool(path) and path.lower().endswith(SOURCE_EXTS)
@@ -162,8 +162,7 @@ def on_post_tool_use(ctx):
             if not sha or sha == ctx.state.last_head_sha:
                 return EMPTY                      # command ran but nothing was committed
             ctx.state.last_head_sha = sha
-            subject = subprocess.run(["git", "-C", ctx.cwd, "log", "-1", "--format=%s"], capture_output=True, text=True, timeout=3).stdout.strip()
-            ctx.state.note_commit(subject)
+            ctx.state.note_commit(gitinfo.last_subject(ctx.cwd))
             branch = gitinfo.current_branch(ctx.cwd)
             text = vault.read(ctx.context_path)
             if text and branch:

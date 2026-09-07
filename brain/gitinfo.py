@@ -14,6 +14,9 @@ def current_branch(cwd):
 def head_sha(cwd):
     return _git(cwd, "rev-parse", "HEAD").strip()
 
+def last_subject(cwd):
+    return _git(cwd, "log", "-1", "--format=%s").strip()
+
 def _since_today():
     return "--since=%s 00:00" % time.strftime("%Y-%m-%d")
 

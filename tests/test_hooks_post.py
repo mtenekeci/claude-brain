@@ -21,7 +21,8 @@ class PostToolUseTests(unittest.TestCase):
         self.assertTrue(hooks.is_source_path("/r/a.ts")); self.assertFalse(hooks.is_source_path("/r/README.md"))
         self.assertEqual(hooks.bash_read_targets("cat src/a.py | head; sed -n '1,20p' lib/b.go && ls"), ["src/a.py", "lib/b.go"])
         self.assertTrue(hooks.is_git_commit("git add . && git commit -m 'x'"))
-        self.assertFalse(hooks.is_git_commit("git commit --dry-run")); self.assertFalse(hooks.is_git_commit("echo git commit"))
+        self.assertTrue(hooks.is_git_commit("git commit --dry-run"))          # HEAD check is the guard, not the regex
+        self.assertFalse(hooks.is_git_commit("git committee")); self.assertFalse(hooks.is_git_commit("git log"))
 
     def _real_commit(self, msg):
         with open(os.path.join(self.repo, "c.py"), "a") as f: f.write("# %s\n" % msg)
@@ -43,6 +44,11 @@ class PostToolUseTests(unittest.TestCase):
         self.assertEqual((s.commits, s.commits_since_vault_write), (1, 1))
         self.assertEqual(s.commit_subjects, ["feat: thing"])
         r = self._post("Bash", command="git commit --amend --no-edit")             # HEAD unchanged again
+        self.assertEqual(state.SessionState.load("s1").commits, 1)
+
+    def test_commit_message_containing_dry_run_still_counts(self):
+        self._real_commit("note: --dry-run is unsupported")
+        self._post("Bash", command="git commit -m 'note: --dry-run is unsupported'")
         self.assertEqual(state.SessionState.load("s1").commits, 1)
 
     def test_reads_count_and_nudge_only_at_3_6_9(self):
