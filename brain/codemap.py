@@ -38,7 +38,7 @@ _SYMBOL_RES = {
     "py": re.compile(r"^(?:class|def)\s+([A-Za-z]\w*)", re.M),
     "go": re.compile(r"^func\s+(?:\([^)]*\)\s*)?([A-Z]\w*)", re.M),
     "rs": re.compile(r"^pub\s+(?:fn|struct|enum|trait|type)\s+([A-Za-z_]\w*)", re.M),
-    "swift": re.compile(r"^(?:(?:public|open|internal|final|private)\s+)*(?:class|struct|enum|protocol|func|actor)\s+([A-Za-z_]\w*)", re.M),
+    "swift": re.compile(r"^(?!\s*(?:private|fileprivate)\b)(?:(?:public|open|internal|final)\s+)*(?:class|struct|enum|protocol|func|actor)\s+([A-Za-z_]\w*)", re.M),
     "cs": re.compile(r"^(?:(?:public|internal|private|protected|static|abstract|sealed|partial)\s+)*(?:class|interface|record|struct|enum)\s+([A-Za-z_]\w*)", re.M),
     "rb": re.compile(r"^\s*(?:class|module|def)\s+(?:self\.)?([A-Za-z_]\w*)", re.M),
 }
@@ -59,7 +59,9 @@ def extract_symbols(text, ext):
             break
     return out
 
-_TS_IMPORT_RE = re.compile(r"""(?:^|\n)\s*(?:import|export)\b[^'"\n]*?from\s*['"](\.{1,2}/[^'"]+)['"]|require\(\s*['"](\.{1,2}/[^'"]+)['"]\s*\)|(?:^|\n)\s*import\s*['"](\.{1,2}/[^'"]+)['"]""")
+_TS_FROM_RE = re.compile(r"""(?:^|\n)\s*(?:import|export)\b[^'"]*?from\s*['"](\.{1,2}/[^'"]+)['"]""")
+_TS_REQUIRE_RE = re.compile(r"""require\(\s*['"](\.{1,2}/[^'"]+)['"]\s*\)""")
+_TS_SIDE_EFFECT_RE = re.compile(r"""(?:^|\n)\s*import\s*['"](\.{1,2}/[^'"]+)['"]""")
 _GO_IMPORT_RE = re.compile(r'"([^"\s]+)"')
 _PY_IMPORT_RE = re.compile(r"^\s*from\s+(\.+)([\w.]*)\s+import", re.M)
 _TS_CANDIDATES = ("", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.tsx", "/index.js")
@@ -83,11 +85,12 @@ def extract_imports(rel_path, text, all_files, go_module=""):
             pkg = imp[len(go_module) + 1:]
             found += sorted(f for f in all_files if f.startswith(pkg + "/") and f.endswith(".go") and "/" not in f[len(pkg) + 1:])[:5]
     elif _EXT_LANG.get(ext) == "ts":
-        for m in _TS_IMPORT_RE.finditer(text):
-            target = _norm(base, m.group(1) or m.group(2) or m.group(3))
-            for cand in _TS_CANDIDATES:
-                if target + cand in all_files:
-                    found.append(target + cand); break
+        for rx in (_TS_FROM_RE, _TS_REQUIRE_RE, _TS_SIDE_EFFECT_RE):
+            for m in rx.finditer(text):
+                target = _norm(base, m.group(1))
+                for cand in _TS_CANDIDATES:
+                    if target + cand in all_files:
+                        found.append(target + cand); break
     elif ext == ".py":
         for m in _PY_IMPORT_RE.finditer(text):
             dots, mod = m.group(1), m.group(2)
@@ -129,8 +132,14 @@ def manifest_deps(project_dir):
     py = _read(os.path.join(project_dir, "pyproject.toml"))
     for m in re.finditer(r'^\s*"?([A-Za-z0-9_.\-]+)"?\s*(?:[<>=!~]|$)', re.sub(r"(?s).*?dependencies\s*=\s*\[", "", py, 1).split("]")[0], re.M) if "dependencies" in py else []:
         deps.add(m.group(1))
+    for table in re.finditer(r'^\[tool\.poetry\.(?:dependencies|dev-dependencies|group\.[\w-]+\.dependencies)\]\s*\n((?:(?!\[)[^\n]*\n?)*)', py, re.M):
+        for m in re.finditer(r'^\s*"?([A-Za-z0-9_.\-]+)"?\s*=', table.group(1), re.M):
+            if m.group(1) != "python":
+                deps.add(m.group(1))
     gm = _read(os.path.join(project_dir, "go.mod"))
     for m in re.finditer(r"^\s*([\w.\-/]+\.[a-z]+/[\w.\-/]+)\s+v[\w.\-+]+", gm, re.M):
+        deps.add(m.group(1))
+    for m in re.finditer(r"^\s*require\s+([\w.\-/]+\.[a-z]+/[\w.\-/]+)\s+v[\w.\-+]+", gm, re.M):
         deps.add(m.group(1))
     cargo = _read(os.path.join(project_dir, "Cargo.toml"))
     if "[dependencies]" in cargo:

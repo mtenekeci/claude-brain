@@ -71,3 +71,25 @@ class CodemapExtractTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(pdir, ".brain", "codelayer.json")))
         self.assertEqual(codemap.read_layer(pdir)["files"], a["files"])
         self.assertIsNone(codemap.read_layer(os.path.join(self.tmp.name, "nowhere")))
+
+    def test_extract_imports_handles_multiline_ts_import(self):
+        files = set(codemap.list_files(self.repo))
+        text = "import {\n  a,\n  b,\n} from './verify';\n"
+        self.assertEqual(codemap.extract_imports("src/auth/x.ts", text, files), ["src/auth/verify.ts"])
+
+    def test_extract_symbols_swift_excludes_private_and_fileprivate(self):
+        self.assertEqual(
+            codemap.extract_symbols("private func hidden() {}\nfileprivate class H {}\nfunc visible() {}\n", ".swift"),
+            ["visible"])
+
+    def test_manifest_deps_go_mod_single_line_require(self):
+        with open(os.path.join(self.repo, "go.mod"), "w") as f:
+            f.write("module m\n\nrequire github.com/lib/pq v1.0.0\n")
+        self.assertIn("github.com/lib/pq", codemap.manifest_deps(self.repo))
+
+    def test_manifest_deps_poetry_tables(self):
+        with open(os.path.join(self.repo, "pyproject.toml"), "w") as f:
+            f.write('[tool.poetry.dependencies]\npython = "^3.9"\nrequests = "^2.0"\n\n'
+                    '[tool.poetry.group.dev.dependencies]\npytest = "^8"\n')
+        deps = codemap.manifest_deps(self.repo)
+        self.assertIn("requests", deps); self.assertIn("pytest", deps); self.assertNotIn("python", deps)
