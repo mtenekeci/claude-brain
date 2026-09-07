@@ -58,6 +58,25 @@ def write_config(tmp, vault, extra=None):
     os.environ.pop("CLAUDE_PROJECT_DIR", None)
     return path
 
+def make_source_tree(repo):
+    """Small mixed TS/Python tree with a manifest, relative imports, and noise dirs."""
+    import subprocess
+    def w(rel, text):
+        p = os.path.join(repo, rel); os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f: f.write(text)
+    w("package.json", '{"name":"demo","dependencies":{"next-auth":"^4","pg":"^8"},"devDependencies":{"jest":"^29"}}')
+    w("src/auth/session.ts", "import { verify } from './verify';\nimport x from '../db';\nexport class SessionStore {}\nexport function refresh() {}\nexport const TTL = 1;\n")
+    w("src/auth/verify.ts", "export function verify() { return true }\nexport default function main() {}\n")
+    w("src/db.ts", "export interface Conn {}\nexport type Row = {}\n")
+    w("lib/util.py", "import os\nfrom .helpers import h\n\nclass Util:\n    pass\n\ndef run():\n    pass\n\ndef _private():\n    pass\n")
+    w("lib/helpers.py", "def h():\n    return 1\n")
+    w("node_modules/junk/index.js", "export function junk() {}\n")
+    w("dist/out.js", "export function built() {}\n")
+    w("README.md", "# Demo\n")
+    w(".gitignore", "node_modules/\ndist/\n")
+    subprocess.run(["git", "-C", repo, "add", "-A"], check=True)
+    subprocess.run(["git", "-C", repo, "commit", "-q", "-m", "tree"], check=True)
+
 def payload(event, cwd, session_id="s1", **kw):
     d = {"session_id": session_id, "cwd": cwd, "hook_event_name": event,
          "transcript_path": "/dev/null", "permission_mode": "default"}
