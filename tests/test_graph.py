@@ -80,5 +80,56 @@ class VaultLayerTests(unittest.TestCase):
         self.assertIn(("project:demo", "concept:postgresql", "mentions"), types)
         self.assertEqual(self.g.dangling, [("project:demo", "concepts/missing-one")])
 
+class GraphCarryOverTests(unittest.TestCase):
+    """Fixes carried over from Task 4's review: accumulated section bodies, stub upgrade,
+    no self-loops, one deduped dangling shape, slugified concept ids."""
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = make_graph_vault(self.tmp.name, slug="demo"); write_config(self.tmp.name, self.vault)
+        self.arch = os.path.join(self.vault, "projects", "demo", "architecture.md")
+    def tearDown(self):
+        self.tmp.cleanup(); os.environ.clear(); os.environ.update(self._env)
+
+    def _build(self, extra=""):
+        if extra:
+            with open(self.arch, "a", encoding="utf-8") as f: f.write(extra)
+        g = graph.Graph(); graph.build_vault_layer(g, self.vault, "demo")
+        return g
+
+    def test_duplicate_heading_bodies_accumulate(self):
+        g = self._build("\n## Notes\nsee:: [[concepts/postgresql|PostgreSQL]]\n\n## Notes\nuses:: [[concepts/nextauth|NextAuth]]\n")
+        types = {(e.src, e.dst, e.type) for e in g.edges}
+        self.assertIn(("section:demo/notes", "concept:postgresql", "see"), types)
+        self.assertIn(("section:demo/notes", "concept:nextauth", "uses"), types)
+
+    def test_add_node_upgrades_external_stub(self):
+        g = graph.Graph()
+        g.add_node(graph.Node("project:other", "project", "other", aliases=["o"], meta={"external": True}))
+        g.add_node(graph.Node("project:other", "project", "Other Project", path="/v/projects/other/context.md", aliases=["op"]))
+        n = g.nodes["project:other"]
+        self.assertNotIn("external", n.meta)
+        self.assertEqual(n.name, "Other Project"); self.assertEqual(n.path, "/v/projects/other/context.md")
+        self.assertEqual(sorted(n.aliases), ["o", "op"])
+
+    def test_add_edge_ignores_self_loops(self):
+        g = graph.Graph(); g.add_node(graph.Node("project:demo", "project", "demo"))
+        g.add_edge("project:demo", "project:demo", "links-to")
+        self.assertEqual(g.edges, []); self.assertEqual(g.degree("project:demo"), 0); self.assertEqual(g.dangling, [])
+
+    def test_dangling_is_deduped_and_single_shape(self):
+        g = self._build("\n## Gaps\nsee:: [[concepts/missing-one|Missing]]\nAlso see:: [[concepts/missing-one|Missing]]\n")
+        self.assertEqual(g.dangling.count(("section:demo/gaps", "concepts/missing-one")), 1)
+        self.assertEqual(len(g.dangling), len(set(g.dangling)))
+        self.assertTrue(all(len(x) == 2 and isinstance(x[1], str) for x in g.dangling))
+
+    def test_concept_ids_use_slugified_stem(self):
+        with open(os.path.join(self.vault, "concepts", "Auth Flow.md"), "w", encoding="utf-8") as f:
+            f.write("---\nconcept: Auth Flow\ntype: subsystem\n---\n\n# Auth Flow\n")
+        g = self._build("\n## Wiring\nuses:: [[concepts/auth-flow|Auth Flow]]\n")
+        self.assertIn("concept:auth-flow", g.nodes)
+        self.assertEqual(g.nodes["concept:auth-flow"].name, "Auth Flow")
+        self.assertIn(("section:demo/wiring", "concept:auth-flow", "uses"), {(e.src, e.dst, e.type) for e in g.edges})
+
 if __name__ == "__main__":
     unittest.main()

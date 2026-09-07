@@ -51,16 +51,25 @@ class Graph(object):
         if cur is None:
             self.nodes[node.id] = node; self._adj.setdefault(node.id, [])
             return node
+        # A stub was created by a link before the real note was read: let the real one win
+        # (name/path/meta), keeping the union of aliases. Merging would strand `external: True`.
+        if cur.meta.get("external") and not node.meta.get("external"):
+            cur.name, cur.path, cur.meta = node.name, node.path, dict(node.meta)
         for a in node.aliases:
             if a not in cur.aliases:
                 cur.aliases.append(a)
         for k, v in node.meta.items():
             cur.meta.setdefault(k, v)
         return cur
+    def record_dangling(self, src, target):
+        """One shape for every unresolved reference: (src, raw target as written). Deduped."""
+        if (src, target) not in self.dangling:
+            self.dangling.append((src, target))
     def add_edge(self, src, dst, type):
+        if src == dst:
+            return                                  # self-loops carry no information and skew degree
         if dst not in self.nodes or src not in self.nodes:
-            if (src, dst) not in self.dangling:
-                self.dangling.append((src, dst))
+            self.record_dangling(src, dst)
             return
         key = (src, dst, type)
         if key in self._seen:
@@ -117,7 +126,7 @@ def resolve_link(raw, project_slug):
     target, _, heading = raw.partition("#")
     parts = target.strip("/").split("/")
     if parts[0] == "concepts" and len(parts) == 2:
-        return node_id("concept", parts[1])
+        return node_id("concept", slugify(parts[1]))    # same normalisation as the note's filename stem
     if parts[0] == "projects" and len(parts) == 3:
         slug, page = parts[1], parts[2]
         if page == "architecture" and heading:
@@ -139,11 +148,17 @@ def _headings(text):
     return out
 
 def _section_bodies(text):
-    """heading -> body text (until next ##/### heading), fences stripped."""
+    """heading slug -> body text (until next ##/### heading), fences stripped.
+
+    Keyed by slug and *accumulated*: two `## Notes` sections collapse to one section node,
+    so both bodies must contribute their links instead of the last one winning.
+    """
     lines = text.splitlines(); heads = _headings(text); bodies = {}
     for idx, (lvl, h, ln) in enumerate(heads):
         end = heads[idx + 1][2] - 1 if idx + 1 < len(heads) else len(lines)
-        bodies[h] = strip_fences("\n".join(lines[ln:end]))
+        body = strip_fences("\n".join(lines[ln:end]))
+        key = slugify(h)
+        bodies[key] = bodies[key] + "\n" + body if key in bodies else body
     return bodies
 
 def _bullet_title(b):
@@ -162,7 +177,7 @@ def _link_edges(g, src, text, project_slug):
         if dst.startswith("project:") and not g.has(dst):
             g.add_node(Node(dst, "project", dst.split(":", 1)[1], meta={"external": True}))
         if not g.has(dst):
-            g.dangling.append((src, raw)); continue
+            g.record_dangling(src, raw); continue
         g.add_edge(src, dst, etype)
 
 def mention_edges(g, texts, project_slug):
@@ -190,11 +205,11 @@ def build_vault_layer(g, vault_root, slug):
     concept_files = sorted(f for f in (os.listdir(cdir) if os.path.isdir(cdir) else []) if f.endswith(".md"))
     for f in concept_files:
         text = vt.read(os.path.join(cdir, f)); cfm, _ = vt.parse_frontmatter(text)
-        cslug = f[:-3]
+        cslug = slugify(f[:-3])
         g.add_node(Node(node_id("concept", cslug), "concept", cfm.get("concept") or cslug, path=os.path.join(cdir, f),
                         aliases=parse_aliases(cfm.get("aliases", "")), meta={"ctype": cfm.get("type", "")}))
     for f in concept_files:
-        cid = node_id("concept", f[:-3]); text = vt.read(os.path.join(cdir, f))
+        cid = node_id("concept", slugify(f[:-3])); text = vt.read(os.path.join(cdir, f))
         for w in WIKILINK_RE.finditer(vt.get_section(text, "Used by")):
             other = resolve_link(w.group(1), slug)
             if other and other.startswith("project:"):
@@ -217,8 +232,8 @@ def build_vault_layer(g, vault_root, slug):
         sid = node_id("section", "%s/%s" % (slug, slugify(h)))
         g.add_node(Node(sid, "section", h, path=arch_path, meta={"line": ln, "level": lvl}))
         g.add_edge(pid, sid, "contains")
-    for h, body in _section_bodies(arch).items():
-        _link_edges(g, node_id("section", "%s/%s" % (slug, slugify(h))), body, slug)
+    for hslug, body in _section_bodies(arch).items():
+        _link_edges(g, node_id("section", "%s/%s" % (slug, hslug)), body, slug)
     # context.md links (outside decisions/questions bullets → attributed to the project)
     _link_edges(g, pid, strip_fences(ctx), slug)
     mention_edges(g, [ctx, arch], slug)
