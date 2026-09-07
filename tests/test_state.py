@@ -48,3 +48,29 @@ class StateTests(unittest.TestCase):
         with state.locked("d") as s:
             s.reads = 9; s.discard = True
         self.assertEqual(state.SessionState.load("d").reads, 0)
+
+    def test_delete_keeps_lock_file(self):
+        with state.locked("e") as s:
+            s.discard = True
+            s.delete()
+        self.assertFalse(os.path.exists(s.path))
+        self.assertTrue(os.path.exists(s.path + ".lock"))
+
+    def test_prune_skips_held_lock(self):
+        import fcntl
+        with state.locked("f") as s:
+            pass
+        old = time.time() - 8 * 86400
+        os.utime(s.path, (old, old))
+        os.utime(s.path + ".lock", (old, old))
+        lock_fd = open(s.path + ".lock", "a")
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        try:
+            state.prune(days=7)
+            self.assertTrue(os.path.exists(s.path + ".lock"))
+            self.assertFalse(os.path.exists(s.path))
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
+        state.prune(days=7)
+        self.assertFalse(os.path.exists(s.path + ".lock"))

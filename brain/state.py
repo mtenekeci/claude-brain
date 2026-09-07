@@ -51,11 +51,14 @@ class SessionState(object):
         os.replace(tmp, self.path)
 
     def delete(self):
-        for p in (self.path, self.path + ".lock"):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+        """Remove only the JSON state file. Never unlink the .lock file: locked()
+        may still hold flock on that inode (e.g. SessionEnd calling delete() from
+        inside locked()), and removing it would let a concurrent locked() open a
+        fresh lock file and proceed unexcluded."""
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
 
     def note_read(self):
         self.reads += 1
@@ -98,11 +101,27 @@ def locked(session_id):
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 def prune(days=7):
+    """Remove stale session files. .json files older than the cutoff are removed
+    outright. .lock files older than the cutoff are only removed if an exclusive,
+    non-blocking flock on them succeeds (i.e. nothing currently holds the lock);
+    otherwise they are left alone so a live locked() block is never undermined."""
     cutoff = time.time() - days * 86400
     for name in os.listdir(_sessions_dir()):
         p = os.path.join(_sessions_dir(), name)
         try:
-            if os.path.getmtime(p) < cutoff:
+            if os.path.getmtime(p) >= cutoff:
+                continue
+            if name.endswith(".lock"):
+                with open(p, "a") as f:
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except (OSError, BlockingIOError):
+                        continue
+                    try:
+                        os.remove(p)
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            else:
                 os.remove(p)
         except OSError:
             pass
