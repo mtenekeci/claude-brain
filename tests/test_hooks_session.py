@@ -149,7 +149,10 @@ class SessionStartGraphTests(unittest.TestCase):
             hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         finally:
             hooks.state.locked, hooks.graph.load = orig_locked, orig_load
-        self.assertEqual(order, ["graph", "lock"])
+        # The invariant is *every* graph build happens before the lock, not how many there are:
+        # lint's auto-apply rewrites context.md and re-loads the graph to refresh the cache.
+        self.assertEqual(order[0], "graph"); self.assertEqual(order[-1], "lock")
+        self.assertEqual(order.count("lock"), 1); self.assertNotIn("graph", order[order.index("lock"):])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,230 @@
+"""Deterministic concept reconciliation.
+
+Writes only two things, ever: `uses::` lines in a project's `context.md ## Architecture`
+and `- [[projects/<slug>/context|<slug>]] — <note>` lines in a concept note's `## Used by`.
+Everything else it touches is read-only. Never raises on missing files — it runs on the
+SessionStart path, where an exception would cost the user their context injection.
+"""
+import json, os, re
+from brain import config, vault, graph, codemap
+
+CANDIDATE_LIMIT = 5
+DANGLING_RENDER_LIMIT = 8
+RENDER_LINE_LIMIT = 40
+
+def _brain_dir(pdir):
+    d = os.path.join(pdir, ".brain")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def load_dismissed(pdir):
+    try:
+        with open(os.path.join(pdir, ".brain", "dismissed.json"), encoding="utf-8") as f:
+            return set(json.load(f).get("candidates", []))
+    except (OSError, ValueError, AttributeError):
+        return set()
+
+def dismiss(pdir, slug):
+    d = load_dismissed(pdir)
+    d.add(slug)
+    path = os.path.join(_brain_dir(pdir), "dismissed.json")
+    tmp = path + ".tmp"                             # atomic: a torn write here silently un-dismisses
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"candidates": sorted(d)}, f, indent=1)
+    os.replace(tmp, path)
+
+def _concepts(g):
+    """Concept nodes, sorted by id — Node has no ordering, and matching must be deterministic."""
+    return sorted((n for n in g.nodes.values() if n.type == "concept"), key=lambda n: n.id)
+
+def _concept_keys(n):
+    """Literal, lowercased identities of a concept: slug, display name, aliases."""
+    keys = {n.id.split(":", 1)[1].lower(), (n.name or "").lower()} | {a.lower() for a in n.aliases}
+    return {k for k in keys if k}
+
+def _norm(s):
+    """Fold a package/concept name to comparable form: lowercase, alphanumerics only.
+
+    Package names carry separators the concept slug drops ("next-auth" vs `nextauth.md`),
+    so literal equality alone misses the match the whole auto-apply rule depends on.
+    """
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+def _match_keys(n):
+    return {k for k in (_norm(x) for x in _concept_keys(n)) if k}
+
+def match_deps_to_concepts(deps, g):
+    """dep name -> concept id. Case- and separator-insensitive; `@scope/name` also tries `name`."""
+    concepts = _concepts(g)
+    out = {}
+    for dep in deps or []:
+        forms = {_norm(dep), _norm(dep.split("/")[-1])}
+        forms.discard("")
+        for n in concepts:
+            if forms & _match_keys(n):
+                out[dep] = n.id
+                break
+    return out
+
+def typed_targets(g, slug):
+    """Concept ids reachable by a TYPED edge from the project node or any node it contains.
+
+    A typed link written on a module, section, decision or question is the project's link —
+    requiring it on the project node itself would flag every properly-documented concept.
+    """
+    pid = graph.node_id("project", slug)
+    owned = {pid} | {o for o, t, d in g.edges_of(pid) if t == "contains" and d == "out"}
+    return {e.dst for e in g.edges
+            if e.src in owned and e.type in graph.TYPED and e.dst.startswith("concept:")}
+
+def apply_auto(vault_root, slug, concept_slug, name, note, add_link):
+    """Append the `uses::` line (when `add_link`) and the `## Used by` row. True if anything was written."""
+    pdir = os.path.join(vault_root, "projects", slug)
+    ctx_path = os.path.join(pdir, "context.md")
+    text = vault.read(ctx_path)
+    wrote = False
+    link = "uses:: [[concepts/%s|%s]]" % (concept_slug, name)
+    if add_link and text and link not in text:
+        lines = vault.get_section(text, "Architecture").splitlines()
+        # The `Full reference:` pointer is the section's last line by convention — stay above it.
+        idx = next((i for i, l in enumerate(lines) if l.startswith("Full reference:")), len(lines))
+        lines.insert(idx, link)
+        vault.write(ctx_path, vault.replace_section(text, "Architecture", "\n".join(lines)))
+        wrote = True
+    cpath = os.path.join(vault_root, "concepts", concept_slug + ".md")
+    ctext = vault.read(cpath)
+    marker = "[[projects/%s/context|%s]]" % (slug, slug)
+    if ctext and marker not in vault.get_section(ctext, "Used by"):
+        body = vault.get_section(ctext, "Used by").rstrip("\n")
+        body = (body + "\n" if body else "") + "- %s — %s" % (marker, note)
+        vault.write(cpath, vault.replace_section(ctext, "Used by", body))
+        wrote = True
+    return wrote
+
+SHORT_SLUG = 6
+
+def _edit_distance(a, b, cap):
+    """Levenshtein, but only accurate up to `cap` — anything further returns `cap + 1`."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1                              # cheap reject: cannot be within `cap` edits
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+def _near_threshold(sa, sb):
+    """Edits allowed before two slugs count as near-duplicates, relative to the shorter one.
+
+    A flat 2 is far too loose on short names: `jest`/`jwt` and `next`/`nuxt` are 2 apart and
+    entirely unrelated. Below `SHORT_SLUG` chars a single edit is all the evidence there is.
+    """
+    return 1 if min(len(sa), len(sb)) < SHORT_SLUG else 2
+
+def duplicates(g):
+    """Concept pairs that share an identity key or sit within a length-relative edit distance.
+
+    O(n²) over concepts, so it is computed only for the CLI report — never on the hook path.
+    """
+    concepts = _concepts(g)
+    out = []
+    for i, a in enumerate(concepts):
+        for b in concepts[i + 1:]:
+            sa, sb = a.id.split(":", 1)[1], b.id.split(":", 1)[1]
+            cap = _near_threshold(sa, sb)
+            if (_concept_keys(a) & _concept_keys(b)) or _edit_distance(sa, sb, cap) <= cap:
+                out.append(tuple(sorted((sa, sb))))
+    return sorted(set(out))
+
+def _project_slugs(vault_root):
+    pr = os.path.join(vault_root, "projects")
+    try:
+        return sorted(d for d in os.listdir(pr) if os.path.isfile(os.path.join(pr, d, "context.md")))
+    except OSError:
+        return []
+
+def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=False):
+    """Reconcile concepts for `slug` (or every project). Auto-applies manifest-dep links.
+
+    `duplicates` is left empty unless `want_duplicates` — it is an O(n²) scan that only the CLI
+    report displays, and `run()` is on the SessionStart path. `render()` fills it in on demand
+    from `_graph`; the underscore marks it as an in-process handle, not part of the result data.
+    """
+    slugs = _project_slugs(vault_root) if all_projects else [slug]
+    if slug not in slugs:
+        slugs = [slug] + slugs
+    result = {"auto_applied": [], "candidates": [], "stale": [], "dangling": [],
+              "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs, "_graph": g}
+    for s in slugs:
+        # Other projects build from their own vault dir; build()/load() tolerate project_dir=None
+        # because the code layer is read from the vault's codelayer.json, not the repo.
+        gg = g if s == slug else graph.load(vault_root, s, None)
+        pdir = os.path.join(vault_root, "projects", s)
+        pid = graph.node_id("project", s)
+        typed = typed_targets(gg, s)
+        dismissed = load_dismissed(pdir)
+        layer = codemap.read_layer(pdir) or {}
+        dep_matches = match_deps_to_concepts(layer.get("deps", []), gg)
+        dep_concepts = set(dep_matches.values())
+        for dep, cid in sorted(dep_matches.items()):
+            n = gg.nodes[cid]
+            if cid.split(":", 1)[1] in dismissed:
+                continue        # dismissal is a standing "no" — auto-apply edits shared concept notes
+            try:
+                wrote = apply_auto(vault_root, s, cid.split(":", 1)[1], n.name,
+                                   "dependency `%s`" % dep, add_link=(cid not in typed))
+            except OSError as e:                    # a read-only vault must not abort the whole report
+                config.log_error("lint: could not auto-link %s in %s: %r" % (cid, s, e))
+                wrote = False
+            if wrote:
+                result["auto_applied"].append(cid.split(":", 1)[1])
+            typed.add(cid)                          # written or already there: the link now exists
+        mentioned = {e.dst for e in gg.edges if e.src == pid and e.type == "mentions"}
+        for cid in sorted(mentioned - typed - dep_concepts):
+            cslug = cid.split(":", 1)[1]
+            if cslug not in dismissed:
+                result["candidates"].append({"slug": cslug, "name": gg.nodes[cid].name,
+                                             "evidence": "mentioned in prose, no typed link"})
+        # `used-by` edges are provenance from the concept note's own ## Used by claim.
+        claimed = {e.dst for e in gg.edges if e.src == pid and e.type == "used-by"}
+        for cid in sorted(claimed - typed - mentioned - dep_concepts):
+            result["stale"].append(cid.split(":", 1)[1])
+        owned_prefixes = ("project:%s" % s, "section:%s/" % s, "module:", "decision:", "question:")
+        result["dangling"] += [d for d in gg.dangling if str(d[0]).startswith(owned_prefixes)]
+    if result["auto_applied"]:
+        graph.load(vault_root, slug, project_dir, force=True)   # our own writes just staled the cache
+    return result
+
+def health_line(res):
+    n = len(res.get("candidates") or [])
+    m = len(res.get("stale") or [])
+    k = len(res.get("dangling") or [])
+    if not (n or m or k):
+        return ""
+    return "Brain: graph health — %d unlinked concept%s, %d stale Used-by entr%s, %d dangling link%s (run /brain sync)" % (
+        n, "" if n == 1 else "s", m, "y" if m == 1 else "ies", k, "" if k == 1 else "s")
+
+def render(res):
+    lines = ["lint: projects %s" % ", ".join(res.get("projects") or [])]
+    if res.get("auto_applied"):
+        lines.append("auto-linked (manifest deps): " + ", ".join(res["auto_applied"]))
+    c = res.get("candidates") or []
+    if c:
+        lines.append("candidates (confirm with a typed link, or dismiss):")
+        lines += ["  - %s — %s (%s)" % (x["slug"], x["name"], x["evidence"]) for x in c[:CANDIDATE_LIMIT]]
+        if len(c) > CANDIDATE_LIMIT:
+            lines.append("  … and %d more" % (len(c) - CANDIDATE_LIMIT))
+    if res.get("stale"):
+        lines.append("stale Used-by (concept claims this project, no reference found): " + ", ".join(res["stale"]))
+    if res.get("dangling"):
+        lines.append("dangling links:")
+        lines += ["  - %s → [[%s]]" % (d[0], d[1]) for d in res["dangling"][:DANGLING_RENDER_LIMIT]]
+    # run() skips the O(n²) duplicate scan; pay for it here, where it is actually displayed.
+    dups = res.get("duplicates") or (duplicates(res["_graph"]) if res.get("_graph") is not None else [])
+    if dups:
+        lines.append("possible duplicate concepts: " + ", ".join("%s ~ %s" % d for d in dups))
+    if len(lines) == 1:
+        lines.append("clean")
+    return "\n".join(lines[:RENDER_LINE_LIMIT]) + "\n"
