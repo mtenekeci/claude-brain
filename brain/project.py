@@ -24,7 +24,7 @@ def _from_dir(d):
     try:
         with open(path) as f:
             text = f.read()
-    except OSError:
+    except (OSError, ValueError):
         return None
     head, _ = split_brain_block(text)
     m = _BRAIN_RE.search(head)

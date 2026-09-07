@@ -46,3 +46,9 @@ class ProjectTests(unittest.TestCase):
 
     def test_vault_project_dir(self):
         self.assertEqual(project.vault_project_dir("/v", "s"), "/v/projects/s")
+
+    def test_undecodable_claude_md(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "CLAUDE.md"), "wb") as f:
+                f.write(b"\xff\xfe# Brain\nbrain: x\n")
+            self.assertIsNone(project.resolve_project(tmp))
