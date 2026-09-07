@@ -102,6 +102,15 @@ class MigrationTests(unittest.TestCase):
         self.assertIn("Brain: migrated old-app to v2 layout", r.stdout)
         self.assertIn("has no context.md", r.stdout)
 
+    def test_existing_backup_is_not_clobbered(self):
+        bak = os.path.join(self.repo, "CLAUDE.md.brain-bak")
+        with open(bak, "w") as f: f.write("PRECIOUS")
+        proj = project.resolve_project(self.repo)
+        actions = migrate.migrate_project(proj, self.vault, self.repo)
+        self.assertEqual(open(bak).read(), "PRECIOUS")
+        self.assertTrue(os.path.exists(bak + ".1"))
+        self.assertTrue(any("brain-bak.1" in a for a in actions))
+
     def test_slim_block_matches_template(self):
         template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "CLAUDE.md")
         with open(template_path, encoding="utf-8") as f:

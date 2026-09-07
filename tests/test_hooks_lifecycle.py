@@ -108,5 +108,14 @@ class LifecycleTests(unittest.TestCase):
         for token in changed.split(" "):
             self.assertTrue(token.endswith("/component.ts"), token)
 
+    def test_changed_line_is_repo_relative_under_symlinked_cwd(self):
+        link = os.path.join(self.tmp.name, "repolink"); os.symlink(self.repo, link)
+        hooks.dispatch("PostToolUse", payload("PostToolUse", link, tool_name="Edit",
+                       tool_input={"file_path": os.path.join(link, "src", "x.ts"), "old_string": "a", "new_string": "b"}, tool_response={}))
+        hooks.dispatch("PreCompact", payload("PreCompact", link))
+        text = vault.read(self.log)
+        self.assertIn("src/x.ts", text)
+        self.assertNotIn("../", text)
+
 if __name__ == "__main__":
     unittest.main()

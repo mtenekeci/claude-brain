@@ -84,3 +84,23 @@ class PostToolUseTests(unittest.TestCase):
         self.assertEqual(r.stdout, "")                                              # vault written since nudge #1 → 6 is silent
         for i in range(6, 9): r = self._post("Read", file_path=os.path.join(self.repo, "f%d.ts" % i))
         self.assertIn("9 source files read", r.stdout)                              # nothing written since → nudges again
+
+    def test_prepare_runs_before_lock_and_supplies_git_facts(self):
+        """Every git subprocess for PostToolUse runs in prepare(), outside the session lock."""
+        seen = {}
+        orig = state.locked
+        def spy(session_id, timeout=None):
+            seen["locked_after_prepare"] = "pre" in seen
+            return orig(session_id, timeout)
+        pre = hooks.on_post_tool_use.prepare
+        def wrapped(c):
+            r = pre(c); seen["pre"] = r; return r
+        hooks.on_post_tool_use.prepare = wrapped
+        state.locked = spy
+        try:
+            self._real_commit("feat: p")
+            self._post("Bash", command="git commit -m 'feat: p'")
+        finally:
+            hooks.on_post_tool_use.prepare = pre; state.locked = orig
+        self.assertTrue(seen["locked_after_prepare"])
+        self.assertEqual(seen["pre"]["subject"], "feat: p"); self.assertEqual(len(seen["pre"]["sha"]), 40)

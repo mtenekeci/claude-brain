@@ -26,6 +26,7 @@ class Ctx(object):
         self.arch_path = os.path.join(self.pdir, "architecture.md")
         self.log_path = os.path.join(self.pdir, "log.md")
         self.state = None   # attached by dispatch() inside state.locked()
+        self.pre = {}       # facts gathered by handler.prepare() BEFORE the lock is taken
 
     def attach_state(self, s):
         # Invariant: slug/vault/project_dir are back-filled exactly once per session and
@@ -66,6 +67,11 @@ def dispatch(event, payload):
         ctx = resolve_ctx(payload)
         if ctx is None:
             return EMPTY
+        # Pre-lock phase: a handler's optional prepare() does the slow, lock-free work
+        # (subprocesses, I/O) so the locked body below stays short. ctx.state is still None here.
+        prepare = getattr(handler, "prepare", None)
+        if prepare is not None:
+            ctx.pre = prepare(ctx) or {}
         # SessionEnd runs against a 1 s hook timeout: never wait on a peer that holds the lock.
         timeout = 0.5 if event == "SessionEnd" else None
         with state.locked(ctx.session_id, timeout=timeout) as s:
@@ -156,7 +162,10 @@ def is_git_commit(cmd):
     return bool(_COMMIT_RE.search(cmd or ""))
 
 def _abs(ctx, p):
-    return p if os.path.isabs(p) else os.path.join(ctx.cwd, p)
+    # realpath: cwd itself can be a symlink into the project, and the resulting path is
+    # both compared against roots (under) and stored in state for later _rel().
+    p = p if os.path.isabs(p) else os.path.join(ctx.cwd, p)
+    return os.path.realpath(p)
 
 def _read_nudge(ctx):
     s = ctx.state
@@ -170,18 +179,26 @@ def _read_nudge(ctx):
         return EMPTY
     return HookResult("Brain: %d source files read — add what you learned to %s (+ a codemap Modules row if it's a module). Concept note only if you'd link it from more than one place.\n" % (s.reads, ctx.arch_path))
 
+def _prepare_post_tool_use(ctx):
+    """Runs BEFORE the session lock: all git subprocess calls for this event live here."""
+    ti = ctx.payload.get("tool_input") or {}
+    if str(ctx.payload.get("tool_name") or "") != "Bash" or not is_git_commit(str(ti.get("command") or "")):
+        return {}
+    return {"sha": gitinfo.head_sha(ctx.cwd), "branch": gitinfo.current_branch(ctx.cwd), "subject": gitinfo.last_subject(ctx.cwd)}
+
 def on_post_tool_use(ctx):
     tool = str(ctx.payload.get("tool_name") or "")
     ti = ctx.payload.get("tool_input") or {}
     if tool == "Bash":
         cmd = str(ti.get("command") or "")
         if is_git_commit(cmd):
-            sha = gitinfo.head_sha(ctx.cwd)
+            pre = ctx.pre                         # gathered by _prepare_post_tool_use, outside the lock
+            sha = pre.get("sha", "")
             if not sha or sha == ctx.state.last_head_sha:
                 return EMPTY                      # command ran but nothing was committed
             ctx.state.last_head_sha = sha
-            ctx.state.note_commit(gitinfo.last_subject(ctx.cwd))
-            branch = gitinfo.current_branch(ctx.cwd)
+            ctx.state.note_commit(pre.get("subject", ""))
+            branch = pre.get("branch", "")
             text = vault.read(ctx.context_path)
             if text and branch:
                 fm, _ = vault.parse_frontmatter(text)
@@ -208,6 +225,8 @@ def on_post_tool_use(ctx):
             ctx.state.note_source_edit(p)
         return EMPTY
     return EMPTY
+
+on_post_tool_use.prepare = _prepare_post_tool_use
 
 _HANDLERS = {
     "SessionStart": on_session_start,
@@ -250,8 +269,9 @@ _HANDLERS["Stop"] = on_stop
 _HANDLERS["UserPromptSubmit"] = on_user_prompt_submit
 
 def _rel(ctx, p):
+    # Both sides realpath'd so a symlinked cwd yields "src/x.ts", never "../../repolink/src/x.ts".
     try:
-        return os.path.relpath(p, ctx.project.project_dir)
+        return os.path.relpath(os.path.realpath(p), os.path.realpath(ctx.project.project_dir))
     except ValueError:
         return p
 

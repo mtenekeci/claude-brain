@@ -28,12 +28,17 @@ class MainEntryPointTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, b"")
 
-    def test_internal_failure_is_logged_and_exits_zero(self):
-        """Any exception below main() is logged to brain.log and exits 0, silently."""
+    def _load_main(self):
+        """Load brain/__main__.py as a standalone module (it is invoked by path, not imported)."""
         import importlib.util
         spec = importlib.util.spec_from_file_location("brain_main_under_test", MAIN)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        return mod
+
+    def test_internal_failure_is_logged_and_exits_zero(self):
+        """Any exception below main() is logged to brain.log and exits 0, silently."""
+        mod = self._load_main()
         env, tmp = dict(os.environ), tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(env)))
@@ -46,6 +51,17 @@ class MainEntryPointTests(unittest.TestCase):
             mod._run = original
         with open(os.path.join(tmp.name, "data", "brain.log"), encoding="utf-8") as f:
             self.assertIn("kaboom", f.read())
+
+    def test_stdin_none_is_treated_as_empty(self):
+        """Claude Code can hand the hook a closed stdin: sys.stdin is None must not raise."""
+        import sys as _sys
+        old = _sys.stdin
+        try:
+            _sys.stdin = None
+            rc = self._load_main().main(["hook", "SessionStart"])
+        finally:
+            _sys.stdin = old
+        self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":

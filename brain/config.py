@@ -7,7 +7,7 @@ def _config_path():
 def load_config():
     """Return the parsed brain.config dict, or {} if missing/invalid."""
     try:
-        with open(_config_path()) as f:
+        with open(_config_path(), encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
@@ -29,7 +29,7 @@ def data_dir():
 
 def log_error(msg):
     try:
-        with open(os.path.join(data_dir(), "brain.log"), "a") as f:
+        with open(os.path.join(data_dir(), "brain.log"), "a", encoding="utf-8") as f:
             f.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), msg))
     except OSError:
         pass

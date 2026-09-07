@@ -35,7 +35,7 @@ class SessionState(object):
     def load(cls, session_id):
         s = cls(session_id)
         try:
-            with open(s.path) as f:
+            with open(s.path, encoding="utf-8") as f:
                 s = cls(session_id, json.load(f))
         except (OSError, ValueError):
             pass
@@ -46,7 +46,7 @@ class SessionState(object):
     def save(self):
         data = {k: getattr(self, k) for k in _DEFAULTS}
         tmp = self.path + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.replace(tmp, self.path)
 
@@ -84,6 +84,21 @@ class SessionState(object):
         self.commits_since_vault_write = 0
         self.source_edits_since_vault_write = 0
 
+def _acquire_with(try_lock, timeout):
+    """try_lock(fd_placeholder) raises OSError when the lock is unavailable. EAGAIN/EWOULDBLOCK → retry until timeout;
+    any other errno → re-raise immediately (a real lock failure, not contention)."""
+    import errno
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return try_lock(None)
+        except OSError as e:
+            if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                raise
+            if time.time() >= deadline:
+                raise BlockingIOError(errno.EAGAIN, "lock busy")
+            time.sleep(0.05)
+
 def _acquire(lock, timeout):
     """Blocking flock when timeout is None; otherwise poll LOCK_NB until the deadline
     and raise BlockingIOError. Callers on a hard deadline (SessionEnd) pass a timeout so
@@ -91,15 +106,7 @@ def _acquire(lock, timeout):
     if timeout is None:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         return
-    deadline = time.time() + timeout
-    while True:
-        try:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return
-        except (OSError, BlockingIOError):
-            if time.time() >= deadline:
-                raise BlockingIOError("lock busy")
-            time.sleep(0.05)
+    _acquire_with(lambda _: fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB), timeout)
 
 @contextlib.contextmanager
 def locked(session_id, timeout=None):

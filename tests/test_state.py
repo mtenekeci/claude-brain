@@ -97,6 +97,14 @@ class StateTests(unittest.TestCase):
             s.reads = 7
         self.assertEqual(state.SessionState.load("x").reads, 7)
 
+    def test_acquire_reports_non_eagain_errors_distinctly(self):
+        """A real lock failure (e.g. ENOLCK on a filesystem without locking) must surface
+        as itself, not be retried until the deadline and reported as contention."""
+        import errno
+        with self.assertRaises(OSError) as cm:
+            state._acquire_with(lambda fd: (_ for _ in ()).throw(OSError(errno.ENOLCK, "no locks")), timeout=0.1)
+        self.assertNotIn("lock busy", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

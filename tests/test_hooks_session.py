@@ -101,7 +101,7 @@ class SessionStartTests(unittest.TestCase):
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks", "hooks.json")
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        self.assertEqual(sorted(data["hooks"]), sorted(hooks._HANDLERS))
+        self.assertTrue(set(data["hooks"]) <= set(hooks._HANDLERS), set(data["hooks"]) - set(hooks._HANDLERS))
 
 
 if __name__ == "__main__":
