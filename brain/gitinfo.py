@@ -23,7 +23,13 @@ def commits_today(cwd):
 
 def changed_files_today(cwd):
     committed = [l for l in _git(cwd, "log", _since_today(), "--name-only", "--format=").splitlines() if l.strip()]
-    status = [l[3:].strip() for l in _git(cwd, "status", "--short").splitlines() if len(l) > 3]
+    status = []
+    for l in _git(cwd, "status", "--short").splitlines():
+        if len(l) > 3:
+            f = l[3:].strip()
+            if " -> " in f:
+                f = f.split(" -> ")[-1]
+            status.append(f)
     seen, out = set(), []
     for f in committed[:8] + status[:5]:
         if f not in seen:

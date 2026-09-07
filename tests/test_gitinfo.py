@@ -18,3 +18,12 @@ class GitInfoTests(unittest.TestCase):
             self.assertEqual(gitinfo.current_branch(tmp), "")
             self.assertEqual(gitinfo.commits_today(tmp), [])
             self.assertEqual(gitinfo.changed_files_today(tmp), [])
+
+    def test_rename_yields_new_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_project(tmp)
+            subprocess.run(["git", "-C", repo, "mv", "a.py", "renamed.py"], check=True)
+            files = gitinfo.changed_files_today(repo)
+            self.assertIn("renamed.py", files)
+            for f in files:
+                self.assertNotIn(" -> ", f)
