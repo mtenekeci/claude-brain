@@ -33,6 +33,14 @@ class PreToolUseTests(unittest.TestCase):
         self.assertEqual(pt("git -C /x push origin main", "feat/x"), ["main"])
         self.assertEqual(pt("git --no-pager -c core.x=1 push origin HEAD:main", "feat/x"), ["main"])
         self.assertEqual(pt("git --git-dir=/x/.git push", "feat/x"), ["feat/x"])
+        # a newline is a segment separator just like ';' — a heredoc/multi-line Bash body
+        # must not hide the push on its second line
+        self.assertEqual(pt("echo hi\ngit push origin main", "feat/x"), ["main"])
+        # bare '&' backgrounds the left segment; the right one is still a real command
+        self.assertEqual(pt("true & git push origin main", "feat/x"), ["main"])
+        # leading VAR=value assignments precede the command word
+        self.assertEqual(pt("GIT_SSH=x git push origin main", "feat/x"), ["main"])
+        self.assertEqual(pt("A=1 B=2 env git push origin main", "feat/x"), ["main"])
 
     def test_push_guard_denies_mismatch_and_protected_main_by_target(self):
         # fixture Hard Rules contain "Never commit directly to `main`."; repo is on main

@@ -413,6 +413,13 @@ _PUSH_VALUE_OPTS = ("-o", "--push-option", "--receive-pack", "--exec")
 _GIT_GLOBAL_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")
 _GIT_GLOBAL_FLAG_OPTS = ("--no-pager", "-P", "--no-optional-locks")
 _REDIR_RE = re.compile(r"^\d*[<>]{1,2}(&\d+)?$")
+# Segment separators: `||` and `&&` first (so they are not split as two bare `|`/`&`), then
+# `;`, a bare `|` pipe, a bare `&` (backgrounding), and a newline — a multi-line Bash body
+# hides a push on its second line otherwise.
+_SEGMENT_RE = re.compile(r"\|\||&&|[;|&\n]")
+# `VAR=value` prefixes sit between the segment start and the command word, exactly like
+# env/command/sudo do: `GIT_SSH=x git push` is still a push.
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 def _is_redir(t):
     return bool(_REDIR_RE.match(t)) or t in ("&>", "&>>")
@@ -420,12 +427,12 @@ def _is_redir(t):
 def push_targets(cmd, current_branch):
     """Branch names a Bash command would push to. Parses real `git push` segments only (never quoted/echoed text)."""
     targets = []
-    for seg in re.split(r"\|\||&&|[;|]", cmd or ""):
+    for seg in _SEGMENT_RE.split(cmd or ""):
         try:
             toks = shlex.split(seg.strip(), comments=True)
         except ValueError:
             continue
-        while toks and toks[0] in ("env", "command", "sudo"):
+        while toks and (toks[0] in ("env", "command", "sudo") or _ASSIGN_RE.match(toks[0])):
             toks = toks[1:]
         if not toks or toks[0] != "git":
             continue
