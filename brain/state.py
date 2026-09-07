@@ -10,6 +10,7 @@ _DEFAULTS = dict(
     commits_since_vault_write=0, source_edits_since_vault_write=0,
     stop_blocks_this_turn=0, codemap_stale=False, backend_fallbacks=0,
     last_head_sha="", log_entries_at_start=-1, last_nudge_bucket=0, vault_writes_at_last_nudge=0,
+    last_regen_spawn_at=0.0,
 )
 
 def _sessions_dir():

@@ -1,5 +1,5 @@
 import os, subprocess, tempfile, unittest
-from tests.helpers import make_vault, make_project, write_config, payload
+from tests.helpers import make_vault, make_project, write_config, payload, stub_popen
 from brain import hooks, state, vault
 
 class PostToolUseTests(unittest.TestCase):
@@ -104,3 +104,15 @@ class PostToolUseTests(unittest.TestCase):
             hooks.on_post_tool_use.prepare = pre; state.locked = orig
         self.assertTrue(seen["locked_after_prepare"])
         self.assertEqual(seen["pre"]["subject"], "feat: p"); self.assertEqual(len(seen["pre"]["sha"]), 40)
+
+    def test_source_edit_spawns_regen_at_most_once_per_minute(self):
+        write_config(self.tmp.name, self.vault, extra={"async_regen": True})
+        calls = []
+        orig_popen = stub_popen(calls)
+        try:
+            for i in range(3):
+                self._post("Edit", file_path=os.path.join(self.repo, "src", "e%d.ts" % i), old_string="a", new_string="b")
+        finally:
+            hooks.subprocess.Popen = orig_popen
+        self.assertEqual(len(calls), 1)
+        s = state.SessionState.load("s1"); self.assertGreater(s.last_regen_spawn_at, 0)

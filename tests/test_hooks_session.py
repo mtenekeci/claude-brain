@@ -1,5 +1,5 @@
 import json, os, tempfile, unittest
-from tests.helpers import make_vault, make_project, write_config, payload
+from tests.helpers import make_vault, make_project, write_config, payload, make_graph_vault, make_source_tree, stub_popen
 from brain import hooks, state
 
 class SessionStartTests(unittest.TestCase):
@@ -102,6 +102,54 @@ class SessionStartTests(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         self.assertTrue(set(data["hooks"]) <= set(hooks._HANDLERS), set(data["hooks"]) - set(hooks._HANDLERS))
+
+
+class SessionStartGraphTests(unittest.TestCase):
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = make_graph_vault(self.tmp.name, slug="demo"); write_config(self.tmp.name, self.vault)
+        self.repo = make_project(self.tmp.name, slug="demo"); make_source_tree(self.repo)
+        self.pdir = os.path.join(self.vault, "projects", "demo")
+
+    def tearDown(self):
+        self.tmp.cleanup(); os.environ.clear(); os.environ.update(self._env)
+
+    def test_session_start_creates_codemap_and_injects_top(self):
+        r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo, source="startup"))
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, "codemap.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, ".brain", "graph.json")))
+        self.assertIn("Brain: most-connected nodes", r.stdout); self.assertIn("project demo", r.stdout)
+        self.assertNotIn("src/auth/session.ts  (SessionStore", r.stdout)          # generated tree is NOT injected
+        tail = r.stdout.split("(last entry only)")[-1]
+        self.assertLessEqual(tail.count("\n"), 45 + 6)                             # +6 for the fixture log entry lines
+
+    def test_large_repo_defers_regeneration(self):
+        write_config(self.tmp.name, self.vault, extra={"async_regen": True})
+        calls = []
+        orig_fc = hooks.codemap.file_count
+        hooks.codemap.file_count = lambda d: 5000
+        orig_popen = stub_popen(calls)
+        try:
+            hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        finally:
+            hooks.codemap.file_count, hooks.subprocess.Popen = orig_fc, orig_popen
+        self.assertEqual(len(calls), 1); self.assertIn("--regen", calls[0][0]); self.assertIn("--force", calls[0][0])
+        self.assertTrue(state.SessionState.load("s1").codemap_stale)
+
+    def test_heavy_work_runs_before_the_lock(self):
+        order = []
+        orig_locked, orig_load = hooks.state.locked, hooks.graph.load
+        def spy_locked(session_id, timeout=None):
+            order.append("lock"); return orig_locked(session_id, timeout)
+        def spy_load(*a, **k):
+            order.append("graph"); return orig_load(*a, **k)
+        hooks.state.locked, hooks.graph.load = spy_locked, spy_load
+        try:
+            hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        finally:
+            hooks.state.locked, hooks.graph.load = orig_locked, orig_load
+        self.assertEqual(order, ["graph", "lock"])
 
 
 if __name__ == "__main__":
