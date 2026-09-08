@@ -6,7 +6,6 @@ from brain import briefing, codemap, config, graph, project, retrieve, state, va
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
 _SOFT_EDIT_THRESHOLD = 5        # soft-tier Stop gate: uncommitted source edits before nudging
 _INJECTED_CAP = 300             # bound on ctx.state.injected — a long session must not grow this file forever
-SOURCE_EXTS = codemap.SOURCE_EXTS
 
 class HookResult(object):
     def __init__(self, stdout="", json=None, exit_code=0, after_lock=None):
@@ -276,7 +275,7 @@ _READ_CMDS = ("cat", "sed", "head", "tail", "less", "bat", "more")
 _COMMIT_RE = re.compile(r"\bgit\s+commit\b")
 
 def is_source_path(path):
-    return bool(path) and path.lower().endswith(SOURCE_EXTS)
+    return bool(path) and path.lower().endswith(codemap.SOURCE_EXTS)
 
 def under(path, root):
     """True when path is inside root. Both sides are realpath'd so a symlinked vault or
