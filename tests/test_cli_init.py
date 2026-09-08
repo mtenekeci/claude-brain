@@ -97,6 +97,19 @@ class InitTests(unittest.TestCase):
             data = json.load(f)
         self.assertEqual(data["other"], 1); self.assertIn("Read(x)", data["permissions"]["allow"])
 
+    def test_grant_permissions_backup_goes_through_atomic_write(self):
+        with open(os.environ["BRAIN_USER_SETTINGS"], "w") as f: f.write('{"permissions": {"allow": ["Read(x)"]}, "other": 1}')
+        real = vault.atomic_write
+        seen = []
+        vault.atomic_write = lambda path, text: (seen.append(path), real(path, text))[1]
+        try:
+            self.assertEqual(initproj.grant_permissions(self.vault), 5)
+        finally:
+            vault.atomic_write = real
+        self.assertEqual(sorted(seen), sorted([os.environ["BRAIN_USER_SETTINGS"], os.environ["BRAIN_USER_SETTINGS"] + ".brain-bak"]))
+        strays = [f for f in os.listdir(os.path.dirname(os.environ["BRAIN_USER_SETTINGS"])) if f.endswith(".tmp")]
+        self.assertEqual(strays, [])
+
     def test_empty_settings_file_is_treated_as_absent(self):
         open(os.environ["BRAIN_USER_SETTINGS"], "w").close()                                     # 0-byte file: benign, not malformed
         self.assertIsNone(initproj.settings_shape_error())

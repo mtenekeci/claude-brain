@@ -82,6 +82,18 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(migrate.strip_legacy_hooks(self.settings), 0)
         with open(self.settings, encoding="utf-8") as f: self.assertEqual(f.read(), raw)
 
+    def test_strip_legacy_hooks_writes_settings_through_atomic_write(self):
+        real = vault.atomic_write
+        seen = []
+        vault.atomic_write = lambda path, text: (seen.append(path), real(path, text))[1]
+        try:
+            self.assertEqual(migrate.strip_legacy_hooks(self.settings), 4)
+        finally:
+            vault.atomic_write = real
+        self.assertEqual(seen, [self.settings])
+        strays = [f for f in os.listdir(os.path.dirname(self.settings)) if f.endswith(".tmp")]
+        self.assertEqual(strays, [])
+
     def test_session_start_runs_migration_and_reports_once(self):
         r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         self.assertIn("Brain: migrated old-app to v2 layout", r.stdout)

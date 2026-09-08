@@ -197,6 +197,82 @@ class SingleTempDisciplineTests(unittest.TestCase):
             self.assertNotIn('+ ".tmp"', code, "%s builds its own temp name" % rel)
             self.assertNotIn("mkstemp", code, "%s opens its own temp file" % rel)
 
+    def test_no_module_other_than_vault_or_log_error_opens_a_file_to_write(self):
+        """`vault.atomic_write` is the single durable-write helper; `config.log_error` is the
+        one legitimate non-atomic writer (append-only, best-effort). Every other `open(...)`
+        call anywhere under `brain/` that writes real content — 'w'/'a'/'x', paired with a
+        `.write(`/`json.dump(` call on the handle — must go through `vault.atomic_write`
+        instead. A bare 'a' open with no write on the handle (a lock-file touch-and-flock, e.g.
+        `brain/state.py`'s `locked()`/`prune()`) writes no content and is not what this guards."""
+        import ast
+
+        write_modes = {"w", "a", "x"}
+
+        class Finder(ast.NodeVisitor):
+            def __init__(self):
+                self.violations = []
+
+            def visit_FunctionDef(self, node):
+                self._check_function(node)
+                self.generic_visit(node)
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def _check_function(self, func):
+                # A single pass over Call nodes is enough: every `open(...)` this repo uses is
+                # either bare or inside a `with`, and both surface as a Call node.
+                for call in (n for n in ast.walk(func) if isinstance(n, ast.Call)):
+                    if not (isinstance(call.func, ast.Name) and call.func.id == "open"):
+                        continue
+                    mode = self._mode_of(call)
+                    if mode not in write_modes:
+                        continue
+                    var = self._bound_name(func, call)
+                    if var and self._writes_content(func, var):
+                        self.violations.append((func.name, mode))
+
+            @staticmethod
+            def _mode_of(call):
+                if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
+                    return call.args[1].value
+                for kw in call.keywords:
+                    if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                        return kw.value.value
+                return "r"                              # open()'s default
+
+            @staticmethod
+            def _bound_name(func, call):
+                for node in ast.walk(func):
+                    if isinstance(node, ast.withitem) and node.context_expr is call and isinstance(node.optional_vars, ast.Name):
+                        return node.optional_vars.id
+                    if isinstance(node, ast.Assign) and node.value is call and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                        return node.targets[0].id
+                return None
+
+            @staticmethod
+            def _writes_content(func, var):
+                for node in ast.walk(func):
+                    if isinstance(node, ast.Call):
+                        if isinstance(node.func, ast.Attribute) and node.func.attr == "write" \
+                                and isinstance(node.func.value, ast.Name) and node.func.value.id == var:
+                            return True
+                        if isinstance(node.func, ast.Attribute) and node.func.attr in ("dump", "dumps") \
+                                and any(isinstance(a, ast.Name) and a.id == var for a in node.args):
+                            return True
+                return False
+
+        violations = {}
+        for rel, text in self._sources():
+            if rel == "vault.py":
+                continue
+            finder = Finder()
+            finder.visit(ast.parse(text, filename=rel))
+            allowed = {("log_error", "a")} if rel == "config.py" else set()
+            bad = [v for v in finder.violations if v not in allowed]
+            if bad:
+                violations[rel] = bad
+        self.assertEqual(violations, {}, "non-atomic content write(s) found outside vault.py/log_error")
+
     def test_writers_delegate_to_atomic_write(self):
         """Spy on the helper and drive each writer that used to have its own temp dance."""
         import json

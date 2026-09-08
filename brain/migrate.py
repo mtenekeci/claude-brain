@@ -55,9 +55,7 @@ def strip_legacy_hooks(settings_path):
     if removed:
         if not hooks:
             del data["hooks"]
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
+        vault.atomic_write(settings_path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     return removed
 
 def _settings_has_legacy(settings_path):
