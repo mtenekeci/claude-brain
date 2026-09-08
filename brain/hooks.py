@@ -562,12 +562,22 @@ _GIT_GLOBAL_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")
 _GIT_GLOBAL_FLAG_OPTS = ("--no-pager", "-P", "--no-optional-locks")
 _REDIR_RE = re.compile(r"^\d*[<>]{1,2}(&\d+)?$")
 # Segment separators: `||` and `&&` first (so they are not split as two bare `|`/`&`), then
-# `;`, a bare `|` pipe, a bare `&` (backgrounding), and a newline — a multi-line Bash body
-# hides a push on its second line otherwise.
-_SEGMENT_RE = re.compile(r"\|\||&&|[;|&\n]")
+# `;`, a bare `|` pipe, a bare `&` (backgrounding), a newline — a multi-line Bash body hides a
+# push on its second line otherwise — and `(`/`)`, so a subshell's body is its own segment.
+_SEGMENT_RE = re.compile(r"\|\||&&|[;|&\n()]")
 # `VAR=value` prefixes sit between the segment start and the command word, exactly like
 # env/command/sudo do: `GIT_SSH=x git push` is still a push.
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# Words that can stand between the start of a segment and the command word without changing
+# what the command is. Shell keywords (`then`/`do`/`else`/`elif`, a group's `{`/`}`, `!`) matter
+# because `if …; then git push origin main; fi` is a shape an agent writes unprompted.
+_WRAPPERS = ("env", "command", "sudo", "nohup", "time", "then", "do", "else", "elif", "{", "}", "!")
+# These take their OWN arguments before the command word, so stripping the wrapper alone leaves
+# `30 git push …` and the segment reads as "not a git command". Skipping ahead to the first
+# `git` token can only ADD targets — the previous behaviour was none at all — so the worst case
+# is a false DENY on `timeout 5 echo git push`, which is the safe direction for a guard.
+_ARG_WRAPPERS = ("timeout", "xargs")
+_SHELLS = ("bash", "sh", "zsh", "dash", "ksh")
 
 def _is_redir(t):
     return bool(_REDIR_RE.match(t)) or t in ("&>", "&>>")
@@ -599,16 +609,56 @@ def _strip_heredocs(cmd):
                 i = j + 1               # skip the body and its terminator
     return "\n".join(out)
 
-def push_targets(cmd, current_branch):
-    """Branch names a Bash command would push to. Parses real `git push` segments only (never quoted/echoed text)."""
+def _shell_c_payload(toks):
+    """The string a `bash -c '…'` segment would run, or None when this is not that shape."""
+    if not toks or os.path.basename(toks[0]) not in _SHELLS:
+        return None
+    for i, t in enumerate(toks[1:], 1):
+        # `-c`, and combined short flags that include it (`bash -lc '…'`).
+        if t.startswith("-") and not t.startswith("--") and "c" in t[1:]:
+            return toks[i + 1] if i + 1 < len(toks) else ""
+    return None
+
+def push_targets(cmd, current_branch, _depth=0):
+    """Branch names a Bash command would push to. Parses real `git push` segments only (never
+    quoted/echoed text).
+
+    Two rules govern every judgement call below: a false DENY costs the user one confirmation,
+    a false ALLOW lets a forbidden push land. So anything this cannot parse but that literally
+    contains `git push` yields the conservative target (the current branch) rather than [] —
+    `on_pre_tool_use` reads an empty list as "not a push at all".
+    """
     targets = []
+
+    def add(names):
+        for n in names:
+            if n and n not in targets:
+                targets.append(n)
+
     for seg in _SEGMENT_RE.split(_strip_heredocs(cmd)):
         try:
             toks = shlex.split(seg.strip(), comments=True)
         except ValueError:
+            # Unbalanced quotes, usually because a separator (`;`, `|`, `(`) inside a quoted
+            # string split the segment mid-quote. Dropping the segment silently is exactly the
+            # false ALLOW this guard exists to prevent.
+            if _PUSH_RE.search(seg):
+                add([current_branch])
             continue
-        while toks and (toks[0] in ("env", "command", "sudo") or _ASSIGN_RE.match(toks[0])):
-            toks = toks[1:]
+        while toks:
+            if toks[0] in _WRAPPERS or _ASSIGN_RE.match(toks[0]):
+                toks = toks[1:]; continue
+            if toks[0] in _ARG_WRAPPERS:
+                toks = toks[toks.index("git"):] if "git" in toks else []
+            break
+        payload = _shell_c_payload(toks)
+        if payload is not None:
+            # Exactly one level deep: the nested string is parsed as a command in its own right
+            # (so `bash -c 'git push origin main'` reports main, not a guess), and anything the
+            # nested parse cannot see through falls back to the conservative target.
+            nested = push_targets(payload, current_branch, _depth + 1) if _depth < 1 else []
+            add(nested or ([current_branch] if _PUSH_RE.search(payload) else []))
+            continue
         if not toks or toks[0] != "git":
             continue
         idx = 1
@@ -651,9 +701,7 @@ def push_targets(cmd, current_branch):
             names.append(dst[len("refs/heads/"):] if dst.startswith("refs/heads/") else dst)
         if not refspecs:
             names.append(current_branch)
-        for n in names:
-            if n and n not in targets:
-                targets.append(n)
+        add(names)
     return targets
 
 def _prepare_pre_tool_use(ctx):

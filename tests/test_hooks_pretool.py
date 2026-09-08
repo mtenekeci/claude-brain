@@ -48,6 +48,32 @@ class PreToolUseTests(unittest.TestCase):
         # a '<<' with no matching terminator line is not a heredoc: nothing may be swallowed
         self.assertEqual(pt('echo "a << b"\ngit push origin main', "feat/x"), ["main"])
 
+    def test_push_targets_sees_through_keywords_subshells_and_wrappers(self):
+        """Each of these returned [] before — and on_pre_tool_use reads [] as "no push", so
+        every one was a false ALLOW on a real `git push origin main`."""
+        pt = hooks.push_targets
+        self.assertEqual(pt("if true; then git push origin main; fi", "feat/x"), ["main"])
+        self.assertEqual(pt("if false; then true; else git push origin main; fi", "feat/x"), ["main"])
+        self.assertEqual(pt("for i in 1; do git push origin main; done", "feat/x"), ["main"])
+        self.assertEqual(pt("while true; do git push origin main; done", "feat/x"), ["main"])
+        self.assertEqual(pt("(git push origin main)", "feat/x"), ["main"])
+        self.assertEqual(pt("{ git push origin main; }", "feat/x"), ["main"])
+        self.assertEqual(pt("nohup git push origin main", "feat/x"), ["main"])
+        self.assertEqual(pt("time git push origin main", "feat/x"), ["main"])
+        self.assertEqual(pt("! git push origin main", "feat/x"), ["main"])
+        # `timeout`/`xargs` take their own arguments before the command word
+        self.assertEqual(pt("timeout 30 git push origin main", "feat/x"), ["main"])
+        self.assertEqual(pt("nohup timeout -k 5 30 git push origin main", "feat/x"), ["main"])
+        # `bash -c` is parsed exactly one level deep, and never yields [] when it does push
+        self.assertEqual(pt("bash -c 'git push origin main'", "feat/x"), ["main"])
+        self.assertEqual(pt("sh -c 'git push origin main'", "feat/x"), ["main"])
+        self.assertEqual(pt("sh -c 'echo hi'", "feat/x"), [])
+        # opaque payload that still contains a push: the conservative target, never []
+        self.assertEqual(pt("bash -c \"echo 'git push origin main'\"", "feat/x"), ["feat/x"])
+        # an unparseable segment (an apostrophe inside double quotes, a paren inside a string)
+        # is conservative too — a dropped segment used to be a silent allow
+        self.assertEqual(pt('git push origin main "(note)"', "feat/x"), ["feat/x"])
+
     def test_push_targets_ignores_herestrings_redirections_and_tags(self):
         pt = hooks.push_targets
         # `<<<` is a herestring, not a heredoc opener: it must not swallow the following lines.
