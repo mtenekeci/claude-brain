@@ -504,25 +504,36 @@ def _cmd_repair(args):
     ctx_path = os.path.join(pdir, "context.md")
     if not os.path.exists(ctx_path):
         print("Project '%s' not found in vault." % slug); return 1
-    project_dir = os.path.realpath(os.getcwd())
-    existing_proj = project.resolve_project(project_dir)
+    cwd = os.path.realpath(os.getcwd())
+    # resolve_project walks up from cwd — a same-slug hit may live in a parent dir. Never
+    # write a nested CLAUDE.md next to it; repair the one that's actually connected.
+    existing_proj = project.resolve_project(cwd)
     if existing_proj is not None and existing_proj.slug != slug:
         print("%s is connected to '%s', not '%s' — refusing to overwrite" % (
-            os.path.join(project_dir, "CLAUDE.md"), existing_proj.slug, slug))
+            existing_proj.claude_md, existing_proj.slug, slug))
         return 1
-    claude_md = os.path.join(project_dir, "CLAUDE.md")
+    target_dir = existing_proj.project_dir if existing_proj is not None else cwd
+    claude_md = os.path.join(target_dir, "CLAUDE.md")
     text = vault.read(claude_md)
-    if existing_proj is not None and existing_proj.slug == slug:
-        # Already has a valid brain block for this slug: replace only that block, keep the rest.
-        _, rest = project.split_brain_block(text)
+    fm_prefix = text[:project.body_start(text)]
+    body = text[len(fm_prefix):]
+    if existing_proj is not None:
+        # Already has a valid brain block for this slug: preserve frontmatter, replace only
+        # the brain block, keep the rest.
+        head, rest = project.split_brain_block(body)
     else:
         # Absent, or present with no recognizable brain line: v1 rule is block + existing verbatim.
-        rest = text
-    arch_text = vault.read(os.path.join(pdir, "architecture.md"))
-    m = re.search(r"^#\s+(.+?)\s+—\s+Architecture Reference\s*$", arch_text, re.M)
-    name = m.group(1) if m else slug
-    vault.write(claude_md, migrate.slim_block(name, slug) + rest)
-    codemap.ensure(project_dir, pdir)
+        head, rest = "", body
+    name = migrate._display_name(head, slug)
+    if os.path.exists(claude_md):
+        vault.write(migrate._backup_path(claude_md), text)
+    vault.write(claude_md, fm_prefix + migrate.slim_block(name, slug) + rest)
+    fm, _ = vault.parse_frontmatter(vault.read(ctx_path))
+    ctx_path_field = fm.get("path", "")
+    if ctx_path_field and ctx_path_field != "—" and os.path.realpath(os.path.expanduser(ctx_path_field)) != target_dir:
+        print("warning: context.md path: %s differs from %s — update it with /brain sync if this folder moved" % (
+            ctx_path_field, target_dir))
+    codemap.ensure(target_dir, pdir)
     print("Repaired: %s" % slug)
     print("CLAUDE.md:      %s" % claude_md)
     print("Codemap:        %s" % os.path.join(pdir, "codemap.md"))

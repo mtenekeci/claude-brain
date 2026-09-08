@@ -24,20 +24,19 @@ def _read(path):
         return f.read()
 
 
-def _subparser_choices():
-    """Every subcommand string the CLI parser accepts, recursively (graph/config nested)."""
+def _subparser_tree():
+    """{sub: {nested subs...}} for every level of the CLI parser (graph/config nested)."""
     from brain import cli
     parser = cli.build_parser()
-    out = set()
 
     def walk(p):
+        out = {}
         for action in p._subparsers._group_actions if p._subparsers else []:
             for name, sub in action.choices.items():
-                out.add(name)
-                walk(sub)
+                out[name] = walk(sub)
+        return out
 
-    walk(parser)
-    return out
+    return walk(parser)
 
 
 class SkillDocsTests(unittest.TestCase):
@@ -59,19 +58,26 @@ class SkillDocsTests(unittest.TestCase):
             self.assertTrue(os.path.exists(path), "SKILL.md references missing commands/%s.md" % m.group(1))
 
     def test_every_brain_invocation_is_a_real_subcommand(self):
-        choices = _subparser_choices()
+        tree = _subparser_tree()
         skill_texts = {SKILL_MD: _read(SKILL_MD)}
         for name in COMMAND_FILES:
             p = os.path.join(COMMANDS_DIR, "%s.md" % name)
             if os.path.exists(p):
                 skill_texts[p] = _read(p)
-        pattern = re.compile(r"\{BRAIN\}\s+([a-zA-Z][a-zA-Z0-9_-]*)")
+        # Captures the top-level subcommand and, when present, the very next word — enough to
+        # validate one level of nesting (`graph <x>`, `config <x>`) against that parent's own
+        # subparser choices, not just against the flattened set of every subcommand anywhere.
+        pattern = re.compile(r"\{BRAIN\}\s+([a-zA-Z][a-zA-Z0-9_-]*)(?:\s+([a-zA-Z][a-zA-Z0-9_-]*))?")
         for path, text in skill_texts.items():
             for m in pattern.finditer(text):
-                sub = m.group(1)
-                if sub == "ask":
+                top, sub = m.group(1), m.group(2)
+                self.assertIn(top, tree, "%s invokes `{BRAIN} %s` which is not a CLI subcommand" % (path, top))
+                nested = tree[top]
+                if sub is None or not nested:
+                    continue  # leaf command, or nothing to validate as a nested subcommand
+                if top == "graph" and sub == "ask":
                     continue  # Task 5 adds `graph ask` in a parallel worktree; allowed even if absent here
-                self.assertIn(sub, choices, "%s invokes `{BRAIN} %s` which is not a CLI subcommand" % (path, sub))
+                self.assertIn(sub, nested, "%s invokes `{BRAIN} %s %s` which is not a CLI subcommand" % (path, top, sub))
 
     def test_protocol_rule_lines_appear_verbatim_in_skill_md(self):
         skill_text = _read(SKILL_MD)
@@ -86,7 +92,10 @@ class SkillDocsTests(unittest.TestCase):
             for dirpath, _, files in os.walk(base):
                 for f in files:
                     path = os.path.join(dirpath, f)
-                    text = _read(path)
+                    try:
+                        text = _read(path)
+                    except UnicodeDecodeError:
+                        continue  # not a text doc we can scan (e.g. a binary asset) — nothing to enforce
                     self.assertNotIn("/Users/", text, "%s contains an absolute /Users/ path" % path)
 
 

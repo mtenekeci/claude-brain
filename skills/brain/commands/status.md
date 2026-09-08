@@ -22,3 +22,5 @@ Nothing to write — this is a read-only report. If the exit code is 2 (no proje
 ## Report
 
 Relay the CLI's output as-is: project name/slug/type, vault path, graph backend, updated date, session count, context size (vs 150-line cap), hook count (plugin-shipped — whatever the CLI prints), codemap freshness, graph size, concept health line, any orphaned v1 hook scripts, then the `── State ──`, `── Active Work ──`, `── Open Questions ──`, `── Last Session ──` sections.
+
+If the orphan line lists any scripts (not `none`), mention that `{BRAIN} status --clean-orphans` will remove the ones no `.claude/settings.json` still references.

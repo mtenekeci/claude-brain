@@ -97,16 +97,21 @@ class ProjectCliTests(unittest.TestCase):
             self.assertIn("some-concept", json.load(f)["candidates"])
 
     def test_repair_refuses_unknown_slug(self):
+        original_ctx = vault.read(self.ctx_path)
         rc, out = self._run("repair", "--slug", "nope"); self.assertEqual(rc, 1)
         self.assertIn("not found in vault", out)
+        self.assertEqual(vault.read(self.ctx_path), original_ctx)
 
     def test_repair_refuses_folder_connected_to_another_slug(self):
+        original_ctx = vault.read(self.ctx_path)
         vault.write(os.path.join(self.repo, "CLAUDE.md"), "# Brain: other\n\nbrain: other\n---\n# notes\n")
         rc, out = self._run("repair", "--slug", "demo"); self.assertEqual(rc, 1)
         self.assertIn("connected to 'other'", out)
         self.assertIn("brain: other", vault.read(os.path.join(self.repo, "CLAUDE.md")))
+        self.assertEqual(vault.read(self.ctx_path), original_ctx)
 
     def test_repair_rewrites_slim_block_and_preserves_rest(self):
+        original_ctx = vault.read(self.ctx_path)
         vault.write(os.path.join(self.repo, "CLAUDE.md"), "# stale notes\nkeep me\n")
         rc, out = self._run("repair", "--slug", "demo"); self.assertEqual(rc, 0)
         self.assertIn("Repaired: demo", out)
@@ -114,13 +119,43 @@ class ProjectCliTests(unittest.TestCase):
         self.assertIn("brain: demo", text)
         self.assertIn("# stale notes\nkeep me\n", text)
         self.assertTrue(os.path.exists(os.path.join(self.pdir, "codemap.md")))
-        # Never touches vault content.
-        self.assertTrue(os.path.exists(self.ctx_path))
+        # Never touches vault content — compare content, not just existence.
+        self.assertEqual(vault.read(self.ctx_path), original_ctx)
 
     def test_repair_writes_slim_block_when_claude_md_absent(self):
+        original_ctx = vault.read(self.ctx_path)
         os.remove(os.path.join(self.repo, "CLAUDE.md"))
         rc, out = self._run("repair", "--slug", "demo"); self.assertEqual(rc, 0)
         self.assertIn("brain: demo", vault.read(os.path.join(self.repo, "CLAUDE.md")))
+        self.assertEqual(vault.read(self.ctx_path), original_ctx)
+
+    def test_repair_preserves_frontmatter_and_backs_up_existing_file(self):
+        original_ctx = vault.read(self.ctx_path)
+        text = ("---\ntitle: hello\n---\n"
+                "# Brain: demo\n\nbrain: demo\n\nVault context is injected by the claude-brain plugin.\n---\n"
+                "# Repo notes\nkeep me\n")
+        claude_md = os.path.join(self.repo, "CLAUDE.md")
+        vault.write(claude_md, text)
+        rc, out = self._run("repair", "--slug", "demo"); self.assertEqual(rc, 0)
+        new_text = vault.read(claude_md)
+        self.assertTrue(new_text.startswith("---\ntitle: hello\n---\n"))
+        self.assertIn("brain: demo", new_text)
+        self.assertIn("# Repo notes\nkeep me\n", new_text)
+        backups = [f for f in os.listdir(self.repo) if f.startswith("CLAUDE.md.brain-bak")]
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(vault.read(os.path.join(self.repo, backups[0])), text)
+        # Never touches vault content — compare content, not just existence.
+        self.assertEqual(vault.read(self.ctx_path), original_ctx)
+
+    def test_repair_writes_to_resolved_project_dir_not_cwd(self):
+        original_ctx = vault.read(self.ctx_path)
+        subdir = os.path.join(self.repo, "sub", "dir")
+        os.makedirs(subdir)
+        os.chdir(subdir)
+        rc, out = self._run("repair", "--slug", "demo"); self.assertEqual(rc, 0)
+        self.assertFalse(os.path.exists(os.path.join(subdir, "CLAUDE.md")))
+        self.assertIn("brain: demo", vault.read(os.path.join(self.repo, "CLAUDE.md")))
+        self.assertEqual(vault.read(self.ctx_path), original_ctx)
 
 
 if __name__ == "__main__":

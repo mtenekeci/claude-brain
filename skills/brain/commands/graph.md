@@ -8,7 +8,7 @@ Use these instead of raw Grep/Glob whenever you need to find where something liv
 
 - `{BRAIN} graph find <term> [--type <type>] [--limit N]` — search nodes by name/alias. Try this first.
 - `{BRAIN} graph near <id-or-term> [--depth N] [--limit N]` — show a node's neighborhood (accepts a node id or a search term, resolved via `find`).
-- `{BRAIN} graph path <a> <b>` — shortest path between two nodes, if any.
+- `{BRAIN} graph path <a> <b>` — shortest path between two nodes, if any. `<a>`/`<b>` must be exact node ids (unlike `near`, `path` does not resolve a search term) — run `graph find` first to get them.
 - `{BRAIN} graph top [--n N]` — the highest-degree (most-connected) nodes, a quick map of the graph's hubs.
 - `{BRAIN} graph lint [--all-projects]` — concept health report: auto-applied manifest-dependency links, unlinked-mention candidates (confirm or dismiss), stale `## Used by` claims, dangling links, possible duplicate concepts.
 - `{BRAIN} graph rebuild` — force a full rebuild of the graph cache (normally incremental).
