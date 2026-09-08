@@ -136,6 +136,19 @@ Configuration lives in one file, `~/.claude/brain.config`. Change it with
 The gate blocks a turn at most once, and never inside a subagent. A turn that ends in a
 question to the user is never soft-blocked.
 
+## The push guard
+
+A `git push` whose target branch is not the one `context.md` records — or is `main`/`master` when
+the project's Hard Rules forbid it — is denied at `PreToolUse` with an explanation. The command is
+parsed rather than pattern-matched, so a push wrapped in a shell keyword, a subshell, a command
+substitution, `sudo`/`env`/`timeout`, or a one-level `bash -c` is still seen; a push it cannot
+resolve to concrete branches is denied too, with a note asking for a plain
+`git push <remote> <branch>`.
+
+It is a speed bump against pushes made by habit, not a sandbox: a shell fed on stdin
+(`printf '…' | sh`), a heredoc body, or a push inside a script file all run outside its reach, and
+nothing about it should be relied on as a security boundary.
+
 ## How the graph works
 
 Nodes are derived from two layers.

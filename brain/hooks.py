@@ -576,9 +576,28 @@ def on_session_end(ctx):
 
 on_pre_compact.prepare = _prepare_pre_compact
 
-_PUSH_RE = re.compile(r"\bgit\s+push\b")
+# The cheap gate in front of the parser: a `git` token and, in the same segment, a later `push`
+# token. NOT `\bgit\s+push\b` — that required them to be adjacent, so every shape git itself
+# accepts a global option in (`git -c x=y push`, `git -C . push`, `git --no-pager push`,
+# `git -P push`, `git --work-tree=. push`) never reached `push_targets`, which has parsed those
+# correctly all along. The lookarounds exclude `-`, so `git-lfs` and `push-notify` are not `git`
+# and `push`; `[^\n;|&]` keeps the two tokens inside one command.
+_PUSH_RE = re.compile(r"(?<![\w./-])git(?![\w-])[^\n;|&]*?(?<![\w./-])push(?![\w-])")
+_CONTINUATION_RE = re.compile(r"\\\n[ \t]*")
+
+def _join_continuations(cmd):
+    """Fold `\\`-newline line continuations back into one line. `git \\<newline>push origin main`
+    is one command to Bash, and both the gate and the segment splitter read newlines as breaks."""
+    return _CONTINUATION_RE.sub(" ", cmd or "")
+
+def looks_like_push(cmd):
+    """Cheap "is this worth parsing" test, shared by the PreToolUse gate and its prepare phase.
+    Deliberately permissive: `push_targets` is what decides, and it returns [] for a mention."""
+    return bool(_PUSH_RE.search(_join_continuations(cmd)))
 _MAIN_RULE_RE = re.compile(r"never\s+.*commit.*\bto\b.*\b(main|master)\b", re.I)
 _PUSH_VALUE_OPTS = ("-o", "--push-option", "--receive-pack", "--exec")
+# Options that push branches the command never names — the branch rules cannot be applied.
+_BROAD_PUSH_OPTS = ("--all", "--mirror", "--branches")
 # git global options that can appear before the `push` subcommand and would otherwise hide it.
 _GIT_GLOBAL_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")
 _GIT_GLOBAL_FLAG_OPTS = ("--no-pager", "-P", "--no-optional-locks")
@@ -618,11 +637,35 @@ def split_segments(cmd):
     `git push origin main --push-option="ref (x)"` in half at the paren INSIDE the quoted
     argument, and the resulting half-segment no longer tokenised — turning a push the guard used
     to catch into one it could not read.
+
+    Command substitution is the exception to that quote-awareness, and it has to be: `"` does not
+    suppress `$(…)` or a backtick in Bash, so `echo "$(git push origin main)"` and
+    `out="$(git push …)"` really do run the push. Those two open a segment whatever the quote
+    state (single quotes excepted — there they are literal), which is why `--push-option="ref (x)"`
+    survives: its paren has no `$` in front of it.
     """
     segs, buf, quote = [], [], ""
+    stack = []                          # ("(" or "`", quote state to restore on close)
     i, n = 0, len(cmd or "")
+
+    def cut():
+        segs.append("".join(buf))
+        del buf[:]
+
     while i < n:
         ch = cmd[i]
+        escaped = i > 0 and cmd[i - 1] == "\\" and (i < 2 or cmd[i - 2] != "\\")
+        if quote != "'" and not escaped and cmd.startswith("$(", i):
+            cut(); stack.append(("(", quote)); quote = ""; i += 2; continue
+        if quote != "'" and not escaped and ch == "`":
+            cut()
+            if stack and stack[-1][0] == "`":
+                quote = stack.pop()[1]
+            else:
+                stack.append(("`", quote)); quote = ""
+            i += 1; continue
+        if quote == "" and ch == ")" and stack and stack[-1][0] == "(":
+            cut(); quote = stack.pop()[1]; i += 1; continue
         if quote:
             buf.append(ch)
             if ch == "\\" and quote == '"' and i + 1 < n:
@@ -635,11 +678,11 @@ def split_segments(cmd):
         if ch in "'\"":
             quote = ch; buf.append(ch); i += 1; continue
         if cmd.startswith("||", i) or cmd.startswith("&&", i):
-            segs.append("".join(buf)); buf = []; i += 2; continue
+            cut(); i += 2; continue
         if ch in _SEPARATORS:
-            segs.append("".join(buf)); buf = []; i += 1; continue
+            cut(); i += 1; continue
         buf.append(ch); i += 1
-    segs.append("".join(buf))
+    cut()
     return segs
 
 def _is_redir(t):
@@ -709,7 +752,7 @@ def push_targets(cmd, current_branch, _depth=0):
             if n and n not in targets:
                 targets.append(n)
 
-    for seg in split_segments(_strip_heredocs(cmd)):
+    for seg in split_segments(_strip_heredocs(_join_continuations(cmd))):
         try:
             toks = shlex.split(seg.strip(), comments=True)
         except ValueError:
@@ -718,7 +761,7 @@ def push_targets(cmd, current_branch, _depth=0):
             if _PUSH_RE.search(seg):
                 add([UNPARSED])
             continue
-        opaque = False
+        opaque = wrapped = False
         while toks:
             if toks[0] in _WRAPPERS or _ASSIGN_RE.match(toks[0]):
                 toks = toks[1:]; continue
@@ -730,7 +773,7 @@ def push_targets(cmd, current_branch, _depth=0):
                 if nxt is None:
                     toks, opaque = [], True
                 else:
-                    toks = toks[nxt:]
+                    toks, wrapped = toks[nxt:], True
                     continue                    # the new head may be another wrapper
             break
         if opaque:
@@ -745,6 +788,11 @@ def push_targets(cmd, current_branch, _depth=0):
             add(nested or ([UNPARSED] if _PUSH_RE.search(payload) else []))
             continue
         if not toks or toks[0] != "git":
+            # `wrapped` means the first-candidate scan above picked the command word, and it was
+            # not a push after all — `sudo -u git git push …` picks the OPTION VALUE `git`. The
+            # scan cannot tell the two apart, so the segment is unresolved, not "no push".
+            if wrapped and _PUSH_RE.search(seg):
+                add([UNPARSED])
             continue
         idx = 1
         while idx < len(toks) and toks[idx] != "push":
@@ -757,8 +805,10 @@ def push_targets(cmd, current_branch, _depth=0):
                 idx += 1; continue
             break
         if idx >= len(toks) or toks[idx] != "push":
+            if wrapped and _PUSH_RE.search(seg):
+                add([UNPARSED])
             continue
-        positional, skip = [], False
+        positional, skip, broad = [], False, False
         for t in toks[idx + 1:]:
             if skip:
                 skip = False; continue
@@ -773,6 +823,10 @@ def push_targets(cmd, current_branch, _depth=0):
             if t in _PUSH_VALUE_OPTS:
                 skip = True; continue
             if t.startswith("-"):
+                # `--all`/`--mirror` push every local branch, `main` among them, without naming
+                # one. The "no refspec means the current branch" rule below is simply wrong for
+                # them, and wrong in the allow direction.
+                broad = broad or t in _BROAD_PUSH_OPTS
                 continue
             positional.append(t)
         refspecs = positional[1:] if positional else []
@@ -785,7 +839,7 @@ def push_targets(cmd, current_branch, _depth=0):
                 continue        # a tag push targets no branch; the branch-mismatch rule cannot apply
             names.append(dst[len("refs/heads/"):] if dst.startswith("refs/heads/") else dst)
         if not refspecs:
-            names.append(current_branch)
+            names.append(UNPARSED if broad else current_branch)
         add(names)
     return targets
 
@@ -794,7 +848,7 @@ def _prepare_pre_tool_use(ctx):
     PreToolUse fires on every matching tool call, so its locked body must stay trivial."""
     ti = ctx.payload.get("tool_input") or {}
     tool = str(ctx.payload.get("tool_name") or "")
-    if tool == "Bash" and _PUSH_RE.search(str(ti.get("command") or "")):
+    if tool == "Bash" and looks_like_push(str(ti.get("command") or "")):
         return {"branch": gitinfo.current_branch(ctx.cwd)}
     if tool in ("Grep", "Glob"):
         term = _search_term(str(ti.get("pattern") or ""))
@@ -820,7 +874,7 @@ def on_pre_tool_use(ctx):
     tool = str(ctx.payload.get("tool_name") or ""); ti = ctx.payload.get("tool_input") or {}
     if tool == "Bash":
         cmd = str(ti.get("command") or "")
-        if not _PUSH_RE.search(cmd):
+        if not looks_like_push(cmd):
             return EMPTY
         targets = push_targets(cmd, ctx.pre.get("branch", ""))
         if not targets:

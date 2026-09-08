@@ -89,6 +89,46 @@ class PreToolUseTests(unittest.TestCase):
         self.assertEqual(pt("timeout 30 bash -c 'git push origin main'", "feat/x"), ["main"])
         self.assertEqual(pt("env -i git push origin main", "feat/x"), ["main"])
 
+    def test_command_substitution_opens_a_segment_even_inside_double_quotes(self):
+        """`"` does not suppress `$(…)` or a backtick in Bash, so capturing a push's output in a
+        quoted substitution really does run the push. Round 2's quote-aware split read them as
+        text and lost the push entirely."""
+        pt = hooks.push_targets
+        self.assertEqual(pt('echo "$(git push origin main)"', "feat/x"), ["main"])
+        self.assertEqual(pt('out="$(git push origin main 2>&1)"', "feat/x"), ["main"])
+        self.assertEqual(pt('if [ -z "$(git push origin main)" ]; then echo x; fi', "feat/x"), ["main"])
+        self.assertEqual(pt("echo `git push origin main`", "feat/x"), ["main"])
+        # single quotes DO suppress both — there it is literal text, and Bash runs nothing
+        self.assertEqual(pt("echo '$(git push origin main)'", "feat/x"), [])
+        # …and the paren that has no `$` in front of it is still just an argument
+        self.assertEqual(pt('git push origin main --push-option="ref (x)"', "feat/x"), ["main"])
+
+    def test_gate_lets_global_git_options_reach_the_parser(self):
+        """`push_targets` has always parsed `git <global option> push`; the `\bgit\s+push\b`
+        gate in front of it never let those commands through, so the parsing was dead code."""
+        for cmd in ("git -c x=y push origin main", "git -C . push origin main",
+                    "git --no-pager push origin main", "git -P push origin main",
+                    "git --work-tree=. push origin main", "git \\\npush origin main"):
+            self.assertTrue(hooks.looks_like_push(cmd), cmd)
+            self.assertEqual(hooks.push_targets(cmd, "feat/x"), ["main"], cmd)
+        # a mention is still only a mention: the gate is permissive, push_targets decides
+        self.assertEqual(hooks.push_targets('git commit -m "add git push guard"', "feat/x"), [])
+        self.assertEqual(hooks.push_targets('grep -r "git push" .', "feat/x"), [])
+        # `git-lfs`/`push-notify` are not the `git`/`push` tokens
+        self.assertFalse(hooks.looks_like_push("git-lfs push-notify"))
+
+    def test_pushes_that_name_no_branch_are_unresolved_not_current_branch(self):
+        """`--all`/`--mirror` push every local branch, `main` among them, without naming one —
+        so the "no refspec means the current branch" rule is wrong in the allow direction. And a
+        wrapper option value that happens to be a command word (`sudo -u git git push`) makes the
+        skip-ahead pick the wrong token, which must not read as "no push"."""
+        pt = hooks.push_targets
+        self.assertEqual(pt("git push --all origin", "feat/x"), [hooks.UNPARSED])
+        self.assertEqual(pt("git push --mirror origin", "feat/x"), [hooks.UNPARSED])
+        self.assertEqual(pt("sudo -u git git push origin main", "feat/x"), [hooks.UNPARSED])
+        # a bare `git push` still means the current branch
+        self.assertEqual(pt("git push", "feat/x"), ["feat/x"])
+
     def test_segments_split_only_on_unquoted_separators(self):
         """A paren (or `;`, or `|`) inside a quoted argument is data, not a separator. Splitting
         there left a half-segment that no longer tokenised — turning a push the guard used to
@@ -149,6 +189,18 @@ class PreToolUseTests(unittest.TestCase):
                     "timeout 30 bash -c 'git push origin main'",
                     'git push origin main --push-option="ref (x)"',
                     "(git push origin main)",
+                    # round 3: substitution inside double quotes, the global-option gate, a
+                    # line continuation, branch-less pushes, and a wrapper option value that
+                    # looks like a command word
+                    'echo "$(git push origin main)"',
+                    'out="$(git push origin main 2>&1)"',
+                    "echo `git push origin main`",
+                    "git -c x=y push origin main",
+                    "git --no-pager push origin main",
+                    "git \\\npush origin main",
+                    "git push --all origin",
+                    "git push --mirror origin",
+                    "sudo -u git git push origin main",
                     "bash -c \"echo 'git push origin main'\""):        # opaque → the sentinel
             r = self._pre("Bash", command=cmd)
             self.assertIsNotNone(r.json, cmd)
@@ -160,6 +212,9 @@ class PreToolUseTests(unittest.TestCase):
         self.assertIsNone(self._pre("Bash", command="git push -u origin feat/x").json)
         self.assertIsNone(self._pre("Bash", command="timeout 30 git push origin feat/x").json)
         self.assertIsNone(self._pre("Bash", command="echo 'git push origin main'").json)
+        self.assertIsNone(self._pre("Bash", command="git -c x=y push origin feat/x").json)
+        self.assertIsNone(self._pre("Bash", command='git commit -m "add git push guard"').json)
+        self.assertIsNone(self._pre("Bash", command='grep -r "git push" .').json)
 
     def test_grep_glob_hints_never_block(self):
         r = self._pre("Grep", pattern="Session(Store|Manager)", path=self.repo)
