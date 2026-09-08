@@ -167,15 +167,38 @@ def manifest_deps(project_dir):
                     deps.add(m.group(1))
     return sorted(d for d in deps if d)
 
+def _porcelain_stat_mark(project_dir, line):
+    """'<size>:<mtime_ns>' for the path named in one `git status --porcelain` line, or 'gone'
+    if it no longer exists. Porcelain paths may be quoted and a rename line reads
+    'R  old -> new' — the working-tree path is always the last token."""
+    path = line[3:] if len(line) > 3 else ""
+    if " -> " in path:
+        path = path.rsplit(" -> ", 1)[-1]
+    path = path.strip().strip('"')
+    if not path:
+        return "gone"
+    try:
+        st = os.stat(os.path.join(project_dir, path))
+        return "%d:%d" % (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return "gone"
+
 def fingerprint(project_dir):
-    """'<HEAD sha>:<md5(git status --porcelain)[:8]>' — changes on commits AND on uncommitted edits. '' outside git."""
+    """'<HEAD sha>:<md5(...)[:8]>' — changes on commits AND on uncommitted edits. The porcelain
+    line alone only names paths, not content, so a second edit to an already-dirty file leaves
+    it byte-identical and the fingerprint would not move; fold each path's `size:mtime_ns` (or
+    'gone' if removed) into the hash alongside the porcelain line. '' outside git."""
     import hashlib
     try:
         r = subprocess.run(["git", "-C", project_dir, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3)
         if r.returncode != 0:
             return ""
         st = subprocess.run(["git", "-C", project_dir, "status", "--porcelain"], capture_output=True, text=True, timeout=5)
-        return r.stdout.strip() + ":" + hashlib.md5((st.stdout if st.returncode == 0 else "").encode("utf-8")).hexdigest()[:8]
+        lines = st.stdout.splitlines() if st.returncode == 0 else []
+        h = hashlib.md5()
+        for line in lines:
+            h.update((line + ":" + _porcelain_stat_mark(project_dir, line) + "\n").encode("utf-8"))
+        return r.stdout.strip() + ":" + h.hexdigest()[:8]
     except (OSError, subprocess.SubprocessError):
         return ""
 

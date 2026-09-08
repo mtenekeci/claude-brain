@@ -225,6 +225,21 @@ class CodemapRenderTests(unittest.TestCase):
         self.assertTrue(codemap.regenerate(self.repo, self.pdir, force=True))
         self.assertGreater(codemap.file_count(self.repo), 5)
 
+    def test_fingerprint_changes_on_a_repeated_edit_to_an_already_dirty_file(self):
+        """fingerprint() used to hash only the porcelain path list, not content, so a second
+        edit to a file already showing dirty left the fingerprint identical and regenerate()
+        skipped a real change."""
+        dirty = os.path.join(self.repo, "src", "dirty.ts")
+        with open(dirty, "w") as f: f.write("export function dirty() {}\n")
+        fp1 = codemap.fingerprint(self.repo)
+        self.assertTrue(codemap.regenerate(self.repo, self.pdir))     # first edit picked up
+        fp2 = codemap.fingerprint(self.repo)
+        self.assertEqual(fp1, fp2)                                    # no further edit → stable
+        with open(dirty, "w") as f: f.write("export function dirty() { return 2; }\n")   # different size
+        fp3 = codemap.fingerprint(self.repo)
+        self.assertNotEqual(fp2, fp3)                                 # repeated edit → fingerprint moves
+        self.assertTrue(codemap.regenerate(self.repo, self.pdir))
+
     def test_non_git_tree_uses_a_content_freshness_key(self):
         """Without git, fingerprint() is empty and regenerate() would rebuild on every call."""
         with tempfile.TemporaryDirectory() as t:
