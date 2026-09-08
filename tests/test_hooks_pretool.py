@@ -64,6 +64,9 @@ class PreToolUseTests(unittest.TestCase):
         # `timeout`/`xargs` take their own arguments before the command word
         self.assertEqual(pt("timeout 30 git push origin main", "feat/x"), ["main"])
         self.assertEqual(pt("nohup timeout -k 5 30 git push origin main", "feat/x"), ["main"])
+        # a wrapper with no bare `git` token left is opaque, not "no push"
+        self.assertEqual(pt("timeout 30 bash -c 'git push origin main'", "feat/x"), ["feat/x"])
+        self.assertEqual(pt("timeout 30 make build", "feat/x"), [])
         # `bash -c` is parsed exactly one level deep, and never yields [] when it does push
         self.assertEqual(pt("bash -c 'git push origin main'", "feat/x"), ["main"])
         self.assertEqual(pt("sh -c 'git push origin main'", "feat/x"), ["main"])

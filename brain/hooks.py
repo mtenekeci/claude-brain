@@ -667,12 +667,21 @@ def push_targets(cmd, current_branch, _depth=0):
             if _PUSH_RE.search(seg):
                 add([current_branch])
             continue
+        opaque = False
         while toks:
             if toks[0] in _WRAPPERS or _ASSIGN_RE.match(toks[0]):
                 toks = toks[1:]; continue
             if toks[0] in _ARG_WRAPPERS:
-                toks = toks[toks.index("git"):] if "git" in toks else []
+                if "git" in toks:
+                    toks = toks[toks.index("git"):]
+                else:
+                    # `timeout 30 bash -c '…'`: the command word is not a bare `git` token and
+                    # the rest is a quoted string this wrapper hands to something else.
+                    toks, opaque = [], True
             break
+        if opaque:
+            add([current_branch] if _PUSH_RE.search(seg) else [])
+            continue
         payload = _shell_c_payload(toks)
         if payload is not None:
             # Exactly one level deep: the nested string is parsed as a command in its own right
