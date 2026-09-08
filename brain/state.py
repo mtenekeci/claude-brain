@@ -13,7 +13,10 @@ _DEFAULTS = dict(
     # today, not yet read; kept deliberately rather than dropped and re-added.
     stop_blocks_this_turn=0, codemap_stale=False, backend_fallbacks=0,
     last_head_sha="", log_entries_at_start=-1, last_nudge_bucket=0, vault_writes_at_last_nudge=0,
-    last_regen_spawn_at=0.0,
+    # last_regen_spawn_at rate-limits the per-edit spawn (once a minute); regen_spawned_for
+    # holds the codemap freshness key SessionStart last spawned a build for, so `compact` and
+    # `resume` — which re-fire SessionStart against this same state file — spawn at most one.
+    last_regen_spawn_at=0.0, regen_spawned_for="",
 )
 
 def _sessions_dir():

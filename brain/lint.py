@@ -150,14 +150,19 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
     """Reconcile concepts for `slug` (or every project). Auto-applies manifest-dep links.
 
     `duplicates` is left empty unless `want_duplicates` — it is an O(n²) scan that only the CLI
-    report displays, and `run()` is on the SessionStart path. `render()` fills it in on demand
-    from `_graph`; the underscore marks it as an in-process handle, not part of the result data.
+    report displays, and `run()` is on the SessionStart path. `render(res, g)` fills it in on
+    demand from the graph the caller already holds; the result dict stays plain JSON-safe data
+    so it can be printed, logged or serialised without a live Graph object riding along.
+
+    Across projects (`all_projects`) every reported entry is prefixed `<slug>: ` — otherwise a
+    bare concept slug in the report names no project the reader can go and fix.
     """
     slugs = _project_slugs(vault_root) if all_projects else [slug]
     if slug not in slugs:
         slugs = [slug] + slugs
+    label = (lambda s_, x: "%s: %s" % (s_, x)) if len(slugs) > 1 else (lambda s_, x: x)
     result = {"auto_applied": [], "auto_pending": 0, "candidates": [], "stale": [], "dangling": [],
-              "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs, "_graph": g}
+              "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs}
     for s in slugs:
         # Other projects build from their own vault dir; build()/load() tolerate project_dir=None
         # because the code layer is read from the vault's codelayer.json, not the repo.
@@ -183,20 +188,24 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
                 config.log_error("lint: could not auto-link %s in %s: %r" % (cid, s, e))
                 wrote = False
             if wrote:
-                result["auto_applied"].append(cid.split(":", 1)[1])
+                result["auto_applied"].append(label(s, cid.split(":", 1)[1]))
             typed.add(cid)                          # written or already there: the link now exists
         mentioned = {e.dst for e in gg.edges if e.src == pid and e.type == "mentions"}
         for cid in sorted(mentioned - typed - dep_concepts):
             cslug = cid.split(":", 1)[1]
             if cslug not in dismissed:
-                result["candidates"].append({"slug": cslug, "name": gg.nodes[cid].name,
+                result["candidates"].append({"slug": label(s, cslug), "name": gg.nodes[cid].name,
                                              "evidence": "mentioned in prose, no typed link"})
         # `used-by` edges are provenance from the concept note's own ## Used by claim.
         claimed = {e.dst for e in gg.edges if e.src == pid and e.type == "used-by"}
         for cid in sorted(claimed - typed - mentioned - dep_concepts):
-            result["stale"].append(cid.split(":", 1)[1])
+            result["stale"].append(label(s, cid.split(":", 1)[1]))
         owned_prefixes = ("project:%s" % s, "section:%s/" % s, "module:", "decision:", "question:")
-        result["dangling"] += [d for d in gg.dangling if str(d[0]).startswith(owned_prefixes)]
+        # `module:`/`decision:`/`question:` ids are not slug-scoped, so two projects that both
+        # contain a `module:api` report the same dangling pair — dedupe, keeping first-seen order.
+        for d in gg.dangling:
+            if str(d[0]).startswith(owned_prefixes) and d not in result["dangling"]:
+                result["dangling"].append(d)
     if result["auto_applied"]:
         graph.load(vault_root, slug, project_dir, force=True)   # our own writes just staled the cache
     return result
@@ -221,7 +230,8 @@ def health_line(res):
         parts.append("%d pending" % p)
     return "Brain: graph health — " + ", ".join(parts) + " (run /brain sync)"
 
-def render(res):
+def render(res, g=None):
+    """`g` is only needed for the on-demand duplicate scan `run()` deliberately skipped."""
     lines = ["lint: projects %s" % ", ".join(res.get("projects") or [])]
     if res.get("auto_applied"):
         pending = res.get("auto_pending") or 0
@@ -235,13 +245,22 @@ def render(res):
             lines.append("  … and %d more" % (len(c) - CANDIDATE_LIMIT))
     if res.get("stale"):
         lines.append("stale Used-by (concept claims this project, no reference found): " + ", ".join(res["stale"]))
-    if res.get("dangling"):
+    dang = res.get("dangling") or []
+    if dang:
         lines.append("dangling links:")
-        lines += ["  - %s → [[%s]]" % (d[0], d[1]) for d in res["dangling"][:DANGLING_RENDER_LIMIT]]
+        lines += ["  - %s → [[%s]]" % (d[0], d[1]) for d in dang[:DANGLING_RENDER_LIMIT]]
+        if len(dang) > DANGLING_RENDER_LIMIT:
+            lines.append("  … and %d more" % (len(dang) - DANGLING_RENDER_LIMIT))
     # run() skips the O(n²) duplicate scan; pay for it here, where it is actually displayed.
-    dups = res.get("duplicates") or (duplicates(res["_graph"]) if res.get("_graph") is not None else [])
+    dups = res.get("duplicates") or (duplicates(g) if g is not None else [])
     if dups:
         lines.append("possible duplicate concepts: " + ", ".join("%s ~ %s" % d for d in dups))
     if len(lines) == 1:
         lines.append("clean")
-    return "\n".join(lines[:RENDER_LINE_LIMIT]) + "\n"
+    if len(lines) > RENDER_LINE_LIMIT:
+        # Backstop only: every section above caps itself (CANDIDATE_LIMIT, DANGLING_RENDER_LIMIT),
+        # so a full report lands around 20 lines and this never fires today. It exists so that a
+        # future uncapped section degrades into a marked truncation rather than a silent one —
+        # same reason as those caps: a report cut without a marker reads as a clean bill of health.
+        lines = lines[:RENDER_LINE_LIMIT - 1] + ["… and %d more lines (run `graph lint` per project)" % (len(lines) - (RENDER_LINE_LIMIT - 1))]
+    return "\n".join(lines) + "\n"

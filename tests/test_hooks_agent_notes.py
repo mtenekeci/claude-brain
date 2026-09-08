@@ -26,12 +26,14 @@ class AgentNotesTests(unittest.TestCase):
         self.assertIsNone(hooks.dispatch("SubagentStart", payload("SubagentStart", self.repo)).json)
 
     def test_foreground_agent_result_with_vault_notes_reminds(self):
-        r = hooks.dispatch("PostToolUse", payload("PostToolUse", self.repo, tool_name="Agent", tool_input={"prompt": "x"},
-                                                  tool_response={"content": "Done.\n\nVault notes:\n- all DB calls go through db.ts"}))
-        self.assertIn("reported vault notes", r.stdout); self.assertIn("architecture.md", r.stdout)
-        r2 = hooks.dispatch("PostToolUse", payload("PostToolUse", self.repo, tool_name="Agent", tool_input={"prompt": "x"},
-                                                   tool_response={"content": "Done."}))
-        self.assertEqual(r2.stdout, "")
+        """Both dispatch tool names: Claude Code sends `Agent` in some builds and `Task` in others."""
+        for tool in hooks.AGENT_TOOLS:
+            r = hooks.dispatch("PostToolUse", payload("PostToolUse", self.repo, tool_name=tool, tool_input={"prompt": "x"},
+                                                      tool_response={"content": "Done.\n\nVault notes:\n- all DB calls go through db.ts"}))
+            self.assertIn("reported vault notes", r.stdout, tool); self.assertIn("architecture.md", r.stdout, tool)
+            r2 = hooks.dispatch("PostToolUse", payload("PostToolUse", self.repo, tool_name=tool, tool_input={"prompt": "x"},
+                                                       tool_response={"content": "Done."}))
+            self.assertEqual(r2.stdout, "", tool)
 
     def test_background_task_notification_with_vault_notes_reminds(self):
         note = "<task-notification>\n<result>Done.\n\nVault notes:\n- auth is enforced in middleware</result>\n</task-notification>"
@@ -61,7 +63,12 @@ class AgentNotesTests(unittest.TestCase):
         data = json.loads(read_text(os.path.join(root, "hooks", "hooks.json")))
         self.assertNotIn("SubagentStop", data["hooks"]); self.assertNotIn("SubagentStop", hooks._HANDLERS)
         self.assertEqual(sorted(data["hooks"]), sorted(hooks._HANDLERS))
-        self.assertEqual(data["hooks"]["PostToolUse"][0]["matcher"], "Bash|Read|Edit|Write|MultiEdit|Agent")
+        matcher = data["hooks"]["PostToolUse"][0]["matcher"]
+        self.assertEqual(matcher, "Bash|Read|Edit|Write|MultiEdit|Agent|Task")
+        # Every subagent tool name the handler branches on must also be in the matcher, or the
+        # hook is never invoked for it in the first place.
+        for name in hooks.AGENT_TOOLS:
+            self.assertIn(name, matcher.split("|"))
 
 
 if __name__ == "__main__":

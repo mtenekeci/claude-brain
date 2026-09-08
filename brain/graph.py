@@ -229,7 +229,10 @@ def build_vault_layer(g, vault_root, slug):
                 if not g.has(other):
                     g.add_node(Node(other, "project", other.split(":", 1)[1], meta={"external": True}))
                 g.add_edge(other, cid, "used-by")       # provenance: the concept note's claim, not the project's own link
-        body = strip_fences(re.sub(r"(?s)## Used by.*", "", text))
+        # Blank out the `## Used by` SECTION only: its links are provenance, already turned
+        # into `used-by` edges above. Truncating from that heading to EOF also dropped every
+        # section a concept note keeps after it (## Notes, ## See also), losing their links.
+        body = strip_fences(vt.replace_section(text, "Used by", ""))
         _link_edges(g, cid, body, slug)
     # decisions / questions
     for sec, ntype in (("Decisions", "decision"), ("Open Questions", "question")):
@@ -267,6 +270,9 @@ def build_code_layer(g, project_slug, layer, modules):
         fid = node_id("file", f["path"])
         g.add_node(Node(fid, "file", os.path.basename(f["path"]), path=f["path"], meta={"lines": f.get("lines", 0)}))
         for s in f.get("symbols", []):
+            # A symbol id embeds its file path ("symbol:src/auth/session.ts#SessionStore") so
+            # two same-named symbols in different files stay distinct nodes. `_haystack` knows
+            # this and matches a symbol on its own name only, never on the embedded path.
             sid = node_id("symbol", "%s#%s" % (f["path"], s))
             g.add_node(Node(sid, "symbol", s, path=f["path"])); g.add_edge(fid, sid, "contains")
     for f in files:                                     # second pass: every import target now exists
@@ -277,6 +283,15 @@ def build_code_layer(g, project_slug, layer, modules):
         g.add_node(Node(mid, "module", row["module"], path=row["path"], meta={"responsibility": row.get("responsibility", "")}))
         g.add_edge(pid, mid, "contains")
         prefix = row["path"].rstrip("/")
+        if prefix in (".", ""):
+            # A `.` path means the repo root. Binding every file in the tree to one module
+            # would make it the graph's highest-degree node by construction, so it binds the
+            # ROOT-level files only — the files a "repo root" module row is actually about.
+            for f in files:
+                if "/" not in f["path"]:
+                    g.add_edge(mid, node_id("file", f["path"]), "contains")
+            _link_edges(g, mid, row.get("links", ""), project_slug)
+            continue
         for f in files:
             if f["path"] == prefix or f["path"].startswith(prefix + "/"):
                 g.add_edge(mid, node_id("file", f["path"]), "contains")
@@ -482,7 +497,11 @@ def render_near(g, id, depth=1, limit=NEAR_LIMIT):
         for o, d in sorted(g.neighbors(id, depth).items(), key=lambda kv: (kv[1], kv[0])):
             if d > 1:
                 lines.append("  ·· %s" % _line(g, g.nodes[o]))
-    return "\n".join(lines[:limit]) + "\n"
+    if len(lines) > limit:
+        # Say so. A hub node silently cut at `limit` reads as "the graph knows this much",
+        # which is exactly the wrong conclusion to draw before deciding to grep instead.
+        lines = lines[:limit - 1] + ["  \u2026 (+%d more \u2014 raise --limit)" % (len(lines) - (limit - 1))]
+    return "\n".join(lines) + "\n"
 
 def render_path(g, ids):
     if not ids or any(i not in g.nodes for i in ids):

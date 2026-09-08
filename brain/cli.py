@@ -25,6 +25,17 @@ def _repo_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _write_block(text):
+    """Emit a multi-line block that already carries its own newlines.
+
+    The convention across this module: `print()` for a single line the CLI composes itself,
+    `sys.stdout.write` for pre-rendered text. Passing file content to `print()` appends a
+    second newline, which is why `/brain load`'s context.md dumps used to gain a blank line
+    between every section and the next heading."""
+    if text:
+        sys.stdout.write(text if text.endswith("\n") else text + "\n")
+
+
 def _curated_text(pdir):
     from brain import codemap
     _, _, curated = codemap.split_codemap(vault.read(os.path.join(pdir, "codemap.md")))
@@ -85,7 +96,7 @@ def _graph(args):
             from brain import lint
         except ImportError:
             print("lint: not available"); return 0
-        sys.stdout.write(lint.render(lint.run(vault, proj.slug, proj.project_dir, g, all_projects=args.all_projects))); return 0
+        sys.stdout.write(lint.render(lint.run(vault, proj.slug, proj.project_dir, g, all_projects=args.all_projects), g)); return 0
     if args.cmd == "dismiss":
         from brain import lint
         pdir = project.vault_project_dir(vault, proj.slug)
@@ -157,7 +168,8 @@ def _init(args):
     if args.type == "topic":
         print("To load this project in any session: /brain load %s" % slug)
     if args.packet and args.type == "code":
-        print("\n=== SEEDING PACKET ===\n" + initproj.seeding_packet(pdir_repo))
+        print("\n=== SEEDING PACKET ===")
+        _write_block(initproj.seeding_packet(pdir_repo))
     return 0
 
 
@@ -217,7 +229,7 @@ def _cmd_sync_prepare(args):
     print("codemap: %s" % ("unknown" if not current else ("fresh" if current == stored else "stale")))
     g = graph.load(vault_root, proj.slug, proj.project_dir)
     print("graph: %d nodes, %d edges" % (len(g.nodes), len(g.edges)))
-    sys.stdout.write(lint.render(lint.run(vault_root, proj.slug, proj.project_dir, g, want_duplicates=False)))
+    sys.stdout.write(lint.render(lint.run(vault_root, proj.slug, proj.project_dir, g, want_duplicates=False), g))
     dirs = codemap.unannotated_dirs(proj.project_dir, _curated_text(pdir))
     print("unannotated dirs:")
     _print_unannotated_dirs(dirs, 5)
@@ -294,7 +306,7 @@ def _cmd_status(args):
     proj = project.resolve_project(os.getcwd())
     if proj is None:
         print("brain: no project resolved for this directory. Known projects:")
-        print(vault.read(os.path.join(vault_root, "_system", "project-index.md")))
+        _write_block(vault.read(os.path.join(vault_root, "_system", "project-index.md")))
         return 2
     pdir = project.vault_project_dir(vault_root, proj.slug)
     ctx_text = vault.read(os.path.join(pdir, "context.md"))
@@ -302,7 +314,7 @@ def _cmd_status(args):
     log_text = vault.read(os.path.join(pdir, "log.md"))
     try:
         from brain import backends
-        backend = backends.select()
+        backend = backends.select(proj.project_dir)     # effective backend, not the configured mode
     except Exception:
         backend = config.load_config().get("graph", {}).get("backend", "auto")
     n_hooks = 0
@@ -348,13 +360,13 @@ def _cmd_status(args):
         if failed:
             print("failed: %s" % ", ".join(failed))
     print("── State " + "─" * 32)
-    print(vault.get_section(ctx_text, "State"))
+    _write_block(vault.get_section(ctx_text, "State"))
     print("── Active Work " + "─" * 26)
-    print(vault.get_section(ctx_text, "Active Work"))
+    _write_block(vault.get_section(ctx_text, "Active Work"))
     print("── Open Questions " + "─" * 23)
-    print(vault.get_section(ctx_text, "Open Questions"))
+    _write_block(vault.get_section(ctx_text, "Open Questions"))
     print("── Last Session " + "─" * 25)
-    print(vault.last_log_entry(log_text))
+    _write_block(vault.last_log_entry(log_text))
     return 0
 
 
@@ -411,13 +423,13 @@ def _cmd_load(args):
     print("Loaded: %s" % ", ".join(resolved))
     for entry, slugs, cpath in expansions:
         print("Via concept '%s': %s" % (entry, ", ".join(slugs)))
-        print(_concept_description(vault.read(cpath)))
+        _write_block(_concept_description(vault.read(cpath)))
     for slug in resolved:
         pdir = os.path.join(vault_root, "projects", slug)
         print("=== %s context.md ===" % slug)
-        print(vault.read(os.path.join(pdir, "context.md")))
+        _write_block(vault.read(os.path.join(pdir, "context.md")))
         print("=== %s log.md (last entry) ===" % slug)
-        print(vault.last_log_entry(vault.read(os.path.join(pdir, "log.md"))))
+        _write_block(vault.last_log_entry(vault.read(os.path.join(pdir, "log.md"))))
     return 0
 
 
@@ -589,10 +601,16 @@ def _cmd_repair(args):
     return 0
 
 
+# Subparsers whose own usage line is what a bare `brain <top>` should print. Filled in by
+# build_parser() so run() can answer "brain graph" with the graph usage, not brain's.
+SUBPARSERS = {}
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="brain", add_help=True)
     sub = p.add_subparsers(dest="top")
     g = sub.add_parser("graph"); gs = g.add_subparsers(dest="cmd")
+    SUBPARSERS["graph"] = g
     f = gs.add_parser("find"); f.add_argument("term"); f.add_argument("--type"); f.add_argument("--limit", type=int, default=15)
     n = gs.add_parser("near"); n.add_argument("node"); n.add_argument("--depth", type=int, default=1); n.add_argument("--limit", type=int, default=40)
     pa = gs.add_parser("path"); pa.add_argument("a"); pa.add_argument("b")
@@ -627,7 +645,10 @@ def run(argv):
         args = parser.parse_args(argv)
     except SystemExit as e:
         return int(e.code or 0)
-    if args.top == "graph" and args.cmd:
+    if args.top == "graph":
+        if not args.cmd:
+            SUBPARSERS["graph"].print_usage()       # `brain graph` alone: show graph's own usage
+            return 1
         return _graph(args)
     if args.top == "map":
         return _map(args)

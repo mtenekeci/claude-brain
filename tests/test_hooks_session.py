@@ -181,3 +181,63 @@ class SessionStartGraphTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LargeRepoDeferralTests(unittest.TestCase):
+    """SessionStart's bounded code-map path: the stub, the injected notice, and the fact that
+    `compact`/`resume` re-firing SessionStart spawns at most one background build."""
+
+    def setUp(self):
+        self._env = dict(os.environ)
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = make_vault(self.tmp.name, slug="demo")
+        write_config(self.tmp.name, self.vault, extra={"async_regen": True})
+        self.repo = make_project(self.tmp.name, slug="demo")
+        self.pdir = os.path.join(self.vault, "projects", "demo")
+        self._orig_lf = hooks.codemap.list_files
+        hooks.codemap.list_files = lambda d: ["src/f%04d.ts" % i for i in range(4000)]
+
+    def tearDown(self):
+        hooks.codemap.list_files = self._orig_lf
+        os.environ.clear(); os.environ.update(self._env)
+        self.tmp.cleanup()
+
+    def _session_starts(self, *sources):
+        calls = []
+        orig_popen = stub_popen(calls)
+        outs = []
+        try:
+            for src in sources:
+                outs.append(hooks.dispatch("SessionStart", payload("SessionStart", self.repo, source=src)).stdout)
+        finally:
+            hooks.subprocess.Popen = orig_popen
+        return outs, calls
+
+    def test_deferred_code_map_is_announced_in_the_injection(self):
+        (out,), calls = self._session_starts("startup")
+        self.assertIn("Brain: code map deferred", out)
+        self.assertIn("map --regen", out)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(state.SessionState.load("s1").codemap_stale)
+
+    def test_compact_and_resume_do_not_each_spawn_a_build(self):
+        outs, calls = self._session_starts("startup", "compact", "resume")
+        self.assertEqual(len(calls), 1, "one detached build per session, not one per SessionStart")
+        self.assertTrue(all("code map deferred" in o for o in outs))
+        # a moved tree earns a fresh build
+        s = state.SessionState.load("s1"); self.assertTrue(s.regen_spawned_for)
+        s.regen_spawned_for = "different-key"; s.save()
+        _, more = self._session_starts("resume")
+        self.assertEqual(len(more), 1)
+
+    def test_a_failed_codemap_refresh_leaves_the_map_marked_stale(self):
+        """`codemap_stale` must not read 'fresh' just because the refresh blew up."""
+        hooks.codemap.list_files = self._orig_lf                    # small repo: the normal path
+        orig = hooks.codemap.ensure
+        hooks.codemap.ensure = lambda *a, **k: (_ for _ in ()).throw(OSError("disk"))
+        try:
+            hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        finally:
+            hooks.codemap.ensure = orig
+        self.assertTrue(state.SessionState.load("s1").codemap_stale)

@@ -54,3 +54,43 @@ class VaultTests(unittest.TestCase):
         self.assertEqual(vault.get_section(text, "State"), "Y.")
         self.assertEqual(vault.get_section(text, "State of the Union"), "X.")
         self.assertEqual(vault.get_section("## Stateful\nZ.\n", "State"), "")
+
+class VaultSweepTests(unittest.TestCase):
+    """Release-sweep fixes: tilde fences, atomic writes, YAML block lists."""
+
+    def test_tilde_fences_hide_headings_like_backtick_fences(self):
+        log = "## Session 1\nCompleted: a\n\n## Session 2\n~~~\n## bogus\n~~~\nmore.\n"
+        self.assertEqual(vault.count_log_entries(log), 2)
+        self.assertTrue(vault.last_log_entry(log).startswith("## Session 2"))
+        self.assertIn("more.", vault.get_section(log, "Session 2"))
+
+    def test_write_is_atomic_and_leaves_no_tmp(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, "sub", "context.md")
+            vault.write(p, "hello\n")
+            self.assertEqual(vault.read(p), "hello\n")
+            self.assertFalse(os.path.exists(p + ".tmp"))
+            # os.replace over a read-only *file* still succeeds; only losing the directory
+            # stops the write — and then no .tmp may be left behind either.
+            os.chmod(os.path.dirname(p), 0o555)
+            try:
+                if os.access(os.path.dirname(p), os.W_OK):
+                    self.skipTest("filesystem ignores chmod; cannot force a write failure")
+                with self.assertRaises(OSError):
+                    vault.write(p, "replaced\n")
+            finally:
+                os.chmod(os.path.dirname(p), 0o755)
+            self.assertFalse(os.path.exists(p + ".tmp"))
+            self.assertEqual(vault.read(p), "hello\n")
+
+    def test_block_list_frontmatter_folds_into_flow_form(self):
+        text = "---\nconcept: PostgreSQL\naliases:\n  - Postgres\n  - \"pg\"\ntype: infra\n---\n\nbody\n"
+        fm, body = vault.parse_frontmatter(text)
+        self.assertEqual(fm["aliases"], "[Postgres, pg]")
+        self.assertEqual((fm["concept"], fm["type"]), ("PostgreSQL", "infra"))
+        self.assertEqual(body, "\nbody\n")
+        from brain import graph
+        self.assertEqual(graph.parse_aliases(fm["aliases"]), ["Postgres", "pg"])
+        # The flow form still parses, and a bare `key:` with no block stays an empty string.
+        fm2, _ = vault.parse_frontmatter("---\naliases: [A, B]\nempty:\nnext: x\n---\n")
+        self.assertEqual((fm2["aliases"], fm2["empty"], fm2["next"]), ("[A, B]", "", "x"))

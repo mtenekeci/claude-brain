@@ -62,15 +62,19 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(s["hooks"]["PostToolUse"], ["not-a-dict", {"hooks": "not-a-list"}])
 
     def test_migration_failure_does_not_suppress_injection(self):
-        os.chmod(os.path.join(self.repo, "CLAUDE.md"), 0o444)     # rewrite of CLAUDE.md will fail
-        if os.access(os.path.join(self.repo, "CLAUDE.md"), os.W_OK):
+        # A read-only *directory*, not a read-only file: vault.write is atomic (tmp+replace),
+        # and os.replace over a 0444 target succeeds — only losing write access to the
+        # directory itself stops the backup/rewrite from landing.
+        os.chmod(self.repo, 0o555)
+        if os.access(self.repo, os.W_OK):
             self.skipTest("running as root or filesystem ignores chmod; cannot force a write failure")
         try:
             r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         finally:
-            os.chmod(os.path.join(self.repo, "CLAUDE.md"), 0o644)
+            os.chmod(self.repo, 0o755)
         self.assertIn("## State\nAlpha works.", r.stdout)
         self.assertNotIn("migrated", r.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "CLAUDE.md.tmp")))
 
     def test_settings_without_brain_hooks_untouched_bytewise(self):
         raw = '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/x.sh"}]}]}}'

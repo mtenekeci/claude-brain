@@ -48,6 +48,20 @@ class PreToolUseTests(unittest.TestCase):
         # a '<<' with no matching terminator line is not a heredoc: nothing may be swallowed
         self.assertEqual(pt('echo "a << b"\ngit push origin main', "feat/x"), ["main"])
 
+    def test_push_targets_ignores_herestrings_redirections_and_tags(self):
+        pt = hooks.push_targets
+        # `<<<` is a herestring, not a heredoc opener: it must not swallow the following lines.
+        self.assertEqual(pt("cat <<<main\ngit push origin main", "feat/x"), ["main"])
+        self.assertEqual(pt("git push origin main <<<x", "feat/x"), ["main"])
+        # An attached redirection token is shell syntax, never a refspec.
+        self.assertEqual(pt("git push origin <<EOF\nbody\nEOF", "feat/x"), ["feat/x"])
+        self.assertEqual(pt("git push origin feat/x >out.log", "feat/x"), ["feat/x"])
+        self.assertEqual(pt("git push origin feat/x 2>err.log", "feat/x"), ["feat/x"])
+        # A tag refspec targets no branch, so the branch-mismatch rule cannot apply to it.
+        self.assertEqual(pt("git push origin refs/tags/v1.0.0", "feat/x"), [])
+        self.assertEqual(pt("git push origin refs/tags/v1.0.0 refs/heads/feat/x", "feat/x"), ["feat/x"])
+        self.assertEqual(pt("git push origin v1.0.0:refs/tags/v1.0.0", "feat/x"), [])
+
     def test_push_guard_denies_mismatch_and_protected_main_by_target(self):
         # fixture Hard Rules contain "Never commit directly to `main`."; repo is on main
         r = self._pre("Bash", command="git push origin main")

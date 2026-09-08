@@ -5,14 +5,39 @@ from collections import OrderedDict
 _FM_RE = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 
 def parse_frontmatter(text):
+    """{key: value} for the leading YAML block. Values stay raw strings — the only structure
+    understood is YAML's block-list form, which Obsidian writes for `aliases:`:
+
+        aliases:
+          - Postgres
+          - pg
+
+    Those indented `- item` continuation lines are folded into the flow form `[Postgres, pg]`
+    so downstream `graph.parse_aliases` sees one shape regardless of how the note was authored.
+    """
     m = _FM_RE.match(text)
     fm = OrderedDict()
     if not m:
         return fm, text
+    key = None
+    block = []
+    def flush():
+        if key is not None and block:
+            fm[key] = "[%s]" % ", ".join(block)
     for line in m.group(1).splitlines():
+        item = line.strip()
+        if key is not None and line[:1] in (" ", "\t") and item.startswith("- "):
+            block.append(item[2:].strip().strip('"\''))
+            continue
+        flush()
+        key, block = None, []
         if ":" in line and not line.startswith(" "):
             k, v = line.split(":", 1)
-            fm[k.strip()] = v.strip().strip('"')
+            k, v = k.strip(), v.strip().strip('"')
+            fm[k] = v
+            if not v:
+                key = k        # a bare `key:` may be followed by an indented block list
+    flush()
     return fm, text[m.end():]
 
 def set_frontmatter(text, key, value):
@@ -27,14 +52,20 @@ def set_frontmatter(text, key, value):
         block = block + "\n%s: %s" % (key, value)
     return "---\n%s\n---\n" % block + text[m.end():]
 
+_FENCE_MARKS = ("```", "~~~")
+
 def _heading_starts(text):
-    """Return character offsets of lines starting with '## ' outside code fences."""
+    """Return character offsets of lines starting with '## ' outside code fences.
+
+    Both CommonMark fence markers count: a log entry pasted inside a `~~~` block used to open
+    a section the caller never wrote, silently swallowing everything after it.
+    """
     offsets = []
     in_fence = False
     char_pos = 0
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
-        if stripped.startswith("```"):
+        if stripped.startswith(_FENCE_MARKS):
             in_fence = not in_fence
         elif not in_fence and line.startswith("## "):
             offsets.append(char_pos)
@@ -42,6 +73,9 @@ def _heading_starts(text):
     return offsets
 
 def _section_span(text, heading):
+    # O(lines + headings): the offsets are re-walked once to find the matching heading LINE
+    # (offsets alone cannot tell `## Decisions` from `## Decisions (old)`). Vault files are
+    # capped at ~150 lines, so the second walk is not worth indexing away.
     offsets = _heading_starts(text)
     target_heading = "## %s" % heading
     start_idx = None
@@ -101,10 +135,25 @@ def read(path):
     except (OSError, ValueError):
         return ""
 
+def _discard(tmp):
+    """Best-effort removal of a scratch file. Never raises: it runs in a `finally`, where a
+    second exception would mask the write failure the caller actually needs to see."""
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+
 def write(path, text):
+    """Atomic tmp+replace. Hooks rewrite context.md from inside a session that Claude Code can
+    kill at any moment; a truncated context.md is worse than a stale one."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        _discard(tmp)           # replace failed — never leave a stray .tmp in the vault
 
 def append(path, text):
     with open(path, "a", encoding="utf-8") as f:

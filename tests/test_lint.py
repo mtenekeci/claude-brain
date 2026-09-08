@@ -74,7 +74,7 @@ class LintTests(unittest.TestCase):
         res = lint.run(self.vault, "demo", self.repo, g)                 # default: no O(n^2) scan
         self.assertEqual(res["duplicates"], [])
         self.assertIn(("postgres", "postgresql"), lint.duplicates(g))    # still available on demand
-        self.assertIn("postgres ~ postgresql", lint.render(res))         # render pays for it itself
+        self.assertIn("postgres ~ postgresql", lint.render(res, g))      # render pays for it itself
         self.assertEqual(lint.health_line(res), lint.health_line(dict(res, duplicates=[])))
 
     def test_near_duplicate_threshold_is_length_relative(self):

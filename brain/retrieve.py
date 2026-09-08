@@ -6,11 +6,18 @@ Uses graph._score and graph._line — private-by-underscore but shared by design
 import math, re
 from brain import graph
 
-STOP = set("the and for with that this from into what when where which how does your about have will just like also than then them they there their been were was are is it its of to in on at by an as or be do if we you can should would could please make sure".split())
+# "next" is here for a brain-specific reason: every log entry ends with a `Next:` line and
+# every plan says "next", so it is the single most common word in these prompts — and it
+# matches the `next`/`next-auth` family of concept nodes on almost every turn.
+STOP = set("the and for with that this from into what when where which how does your about have will just like also than then them they there their been were was are is it its of to in on at by an as or be do if we you can should would could please make sure next".split())
 DONE_SIGNALS = ("thanks", "thank you", "done", "ship it", "looks good", "lgtm", "that's all", "close this", "bye", "good job", "perfect")
 _NEGATIONS = ("not", "isn't", "aren't", "don't", "never", "nothing", "isnt", "dont")
 _SPAN_RE = re.compile(r"`([^`]+)`|\"([^\"]+)\"|'([^']{3,})'")
 _WORD_RE = re.compile(r"[A-Za-z_][\w./-]{3,}")
+# A pasted URL is pure noise for graph retrieval: `_WORD_RE` shreds it into "https",
+# "github.com", "issues" etc., each of which can burn one of the 12 token slots and
+# substring-match unrelated file nodes.
+_URL_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://\S+|\bwww\.\S+")
 
 def is_system_prompt(prompt):
     p = (prompt or "").lstrip()
@@ -43,9 +50,9 @@ def tokens(prompt, limit=12):
     text = prompt or ""
     for m in _SPAN_RE.finditer(text):
         t = (m.group(1) or m.group(2) or m.group(3) or "").strip().lower()
-        if t and t not in out:
+        if t and t not in out and not _URL_RE.match(t):
             out.append(t)
-    text = _SPAN_RE.sub(" ", text)
+    text = _URL_RE.sub(" ", _SPAN_RE.sub(" ", text))
     for m in _WORD_RE.finditer(text):
         t = m.group(0).lower().strip("./-")
         if len(t) >= 4 and t not in STOP and t not in out:

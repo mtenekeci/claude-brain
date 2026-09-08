@@ -130,8 +130,12 @@ def _claim_regen_slot(ctx, enabled):
 
 def _prepare_session_start(ctx):
     """Everything slow or git-touching for SessionStart runs here, BEFORE the session lock."""
+    # log.md is read ONCE per event: the locked body needs the last entry and prepare needs the
+    # entry count, and re-reading it under the lock put file I/O in the critical section.
+    log_text = vault.read(ctx.log_path)
     pre = {"migrated_line": "", "large": False, "top": "", "health": "", "head_sha": gitinfo.head_sha(ctx.cwd),
-           "log_entries": vault.count_log_entries(vault.read(ctx.log_path)), "branch": gitinfo.current_branch(ctx.cwd)}
+           "log_entries": vault.count_log_entries(log_text), "last_entry": vault.last_log_entry(log_text),
+           "refreshed": False, "regen_key": "", "branch": gitinfo.current_branch(ctx.cwd)}
     try:
         from brain import migrate
     except ImportError:         # module not installed yet — nothing to migrate
@@ -151,11 +155,14 @@ def _prepare_session_start(ctx):
         pre["large"] = len(files) >= codemap.LARGE_REPO_FILES
         if pre["large"]:
             # A full build_layer() here would read every source file synchronously before the
-            # user's first prompt. Write the scaffold; the detached --force regen fills it in.
+            # user's first prompt (the tree render alone is O(n^2) in the file count). Write the
+            # scaffold; the detached --force regen fills it in.
             codemap.ensure_stub(ctx.project.project_dir, ctx.pdir)
             if config.async_regen():
-                # Outside the lock by construction: prepare() runs before state.locked().
-                pre["spawned"] = _spawn_regen_process(ctx.project.project_dir, force=True)
+                # The Popen itself is decided under the lock (on_session_start) and performed
+                # after it, so `compact`/`resume` in the same session cannot each spawn one.
+                pre["want_regen"] = True
+                pre["regen_key"] = codemap.freshness_key(ctx.project.project_dir, files)
             else:
                 # No background process will ever fill the stub in, so the foreground build is
                 # the only path left — an empty code map all session is the worse trade.
@@ -164,6 +171,7 @@ def _prepare_session_start(ctx):
         else:
             codemap.ensure(ctx.project.project_dir, ctx.pdir, files=files)
             codemap.regenerate(ctx.project.project_dir, ctx.pdir, files=files)
+        pre["refreshed"] = True
     except Exception as e:
         config.log_error("codemap refresh failed: %r" % e)
     g = None
@@ -202,21 +210,36 @@ def on_session_start(ctx):
         ctx.state.log_entries_at_start = ctx.pre.get("log_entries", 0)
     if not ctx.state.last_head_sha:
         ctx.state.last_head_sha = ctx.pre.get("head_sha", "")
-    ctx.state.codemap_stale = bool(ctx.pre.get("large")) and not ctx.pre.get("built_sync")
-    if ctx.pre.get("spawned"):
-        ctx.state.last_regen_spawn_at = time.time()   # the Popen itself already ran, pre-lock
+    # Stale unless the refresh actually ran to completion: an exception in prepare left the
+    # code map untouched, which is exactly the case a "fresh" flag would hide.
+    deferred = bool(ctx.pre.get("large")) and not ctx.pre.get("built_sync")
+    ctx.state.codemap_stale = deferred or not ctx.pre.get("refreshed")
+    after_lock = None
+    if ctx.pre.get("want_regen"):
+        key = ctx.pre.get("regen_key", "")
+        # Once per session-state lifetime unless the tree moved: `compact` and `resume` re-fire
+        # SessionStart against the same state file and would otherwise each spawn a build.
+        if ctx.state.regen_spawned_for != key:
+            ctx.state.regen_spawned_for = key
+            ctx.state.last_regen_spawn_at = time.time()
+            project_dir = ctx.project.project_dir
+            after_lock = lambda: _spawn_regen_process(project_dir, force=True)
     parts = [_protocol(ctx).rstrip("\n"), ""]
     context_text = vault.read(ctx.context_path)
     if not context_text:
         msg = "Brain: project '%s' has no context.md at %s — run /brain init.\n" % (ctx.project.slug, ctx.pdir)
-        return HookResult(migrated_line + "\n" + msg if migrated_line else msg)
+        return HookResult(migrated_line + "\n" + msg if migrated_line else msg, after_lock=after_lock)
     parts.append(_banner("VAULT FILE: " + ctx.context_path) + context_text.rstrip("\n"))
-    last = vault.last_log_entry(vault.read(ctx.log_path))
+    last = ctx.pre.get("last_entry", "")                # read once, in prepare
     if last:
         parts += ["", _banner("VAULT FILE: %s (last entry only)" % ctx.log_path) + last]
     if os.path.exists(ctx.arch_path):
         parts += ["", "Tier 2 (read by section, on demand): " + ctx.arch_path]
     parts += _graph_lines(ctx)
+    if deferred:
+        parts += ["", "Brain: code map deferred — this repo has %d+ tracked files, so codemap.md "
+                      "holds only the curated block for now. Run `%s map --regen` if you need the "
+                      "generated tree this session." % (codemap.LARGE_REPO_FILES, cli_command())]
     if source in ("compact", "resume"):
         fm, _ = vault.parse_frontmatter(context_text)
         expected = fm.get("branch") or "unset"
@@ -224,7 +247,7 @@ def on_session_start(ctx):
             source, ctx.pre.get("branch") or "?", expected)]
     if migrated_line:
         parts += ["", migrated_line]
-    return HookResult("\n".join(parts) + "\n")
+    return HookResult("\n".join(parts) + "\n", after_lock=after_lock)
 
 on_session_start.prepare = _prepare_session_start
 
@@ -291,10 +314,15 @@ def _prepare_post_tool_use(ctx):
         return {}
     return {"sha": gitinfo.head_sha(ctx.cwd), "branch": gitinfo.current_branch(ctx.cwd), "subject": gitinfo.last_subject(ctx.cwd)}
 
+# Both names for a subagent dispatch: `Agent` is the documented tool name, `Task` is what
+# several Claude Code builds actually put in tool_name. hooks/hooks.json matches both.
+AGENT_TOOLS = ("Agent", "Task")
+
+
 def on_post_tool_use(ctx):
     tool = str(ctx.payload.get("tool_name") or "")
     ti = ctx.payload.get("tool_input") or {}
-    if tool == "Agent":
+    if tool in AGENT_TOOLS:
         # A foreground subagent's result lands in the PARENT turn, which is the only place the
         # notes can actually be written. (SubagentStop's output never reached it — SMOKE.md #10.)
         if "Vault notes:" in str(ctx.payload.get("tool_response") or ""):
@@ -493,8 +521,10 @@ _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 def _is_redir(t):
     return bool(_REDIR_RE.match(t)) or t in ("&>", "&>>")
 
-# `<<WORD`, `<<-WORD`, `<<'WORD'`. `(?!<)` keeps a `<<<` herestring out of it.
-_HEREDOC_RE = re.compile(r"<<(?!<)-?\s*[\"']?(\w+)[\"']?")
+# `<<WORD`, `<<-WORD`, `<<'WORD'`. The lookarounds keep a `<<<` herestring out of it on BOTH
+# sides: `(?!<)` alone still matched the 2nd and 3rd `<` of `<<<WORD`, so `git push <<< x`
+# swallowed the rest of the command.
+_HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)-?\s*[\"']?(\w+)[\"']?")
 
 def _strip_heredocs(cmd):
     """Drop heredoc bodies: their lines are data for the command, not commands themselves, so
@@ -509,6 +539,9 @@ def _strip_heredocs(cmd):
         i += 1
         for word in _HEREDOC_RE.findall(line):
             j = i
+            # `.strip()`, not an exact match: real Bash only allows a leading-tab-indented
+            # terminator for the `<<-` form. Being lenient for plain `<<WORD` can only ever
+            # end a heredoc EARLY, which un-hides commands — the safe direction for a guard.
             while j < len(lines) and lines[j].strip() != word:
                 j += 1
             if j < len(lines):
@@ -547,6 +580,10 @@ def push_targets(cmd, current_branch):
                 if t.endswith(">") or t.endswith("<"):
                     skip = True     # drop the redirection's filename too
                 continue
+            # An attached redirection token (`>out.log`, `<<EOF`, `2>&1`) is shell syntax, not a
+            # refspec — `git push <<EOF` used to be read as a push to a branch named "<<EOF".
+            if t.startswith(("<", ">")) or re.match(r"^\d+[<>]", t):
+                continue
             if t in _PUSH_VALUE_OPTS:
                 skip = True; continue
             if t.startswith("-"):
@@ -558,6 +595,8 @@ def push_targets(cmd, current_branch):
             r = r.lstrip("+")
             dst = r.split(":", 1)[1] if ":" in r else r
             dst = current_branch if dst == "HEAD" else dst
+            if dst.startswith("refs/tags/"):
+                continue        # a tag push targets no branch; the branch-mismatch rule cannot apply
             names.append(dst[len("refs/heads/"):] if dst.startswith("refs/heads/") else dst)
         if not refspecs:
             names.append(current_branch)

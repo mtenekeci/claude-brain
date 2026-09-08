@@ -2,6 +2,8 @@
 Deterministic; never touches the curated block of codemap.md (rendering lives in part 2)."""
 import json, os, re, subprocess, time
 
+from brain import config
+
 SOURCE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".rb", ".java", ".kt", ".swift",
                ".vue", ".svelte", ".c", ".cpp", ".cs", ".php", ".scala", ".m", ".mm", ".h")
 MANIFESTS = ("package.json", "pyproject.toml", "requirements.txt", "go.mod", "Cargo.toml", "Package.swift")
@@ -21,7 +23,10 @@ def _keep(rel):
 
 def list_files(project_dir):
     try:
-        r = subprocess.run(["git", "-C", project_dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        # -c core.quotePath=false: without it git renders a non-ASCII path as C-style
+        # escapes ("caf\303\251.ts"), which no later os.path.join can open.
+        r = subprocess.run(["git", "-C", project_dir, "-c", "core.quotePath=false",
+                            "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
                            capture_output=True, timeout=10)
         if r.returncode == 0:
             rels = [p.decode("utf-8", "replace") for p in r.stdout.split(b"\0") if p]
@@ -38,11 +43,13 @@ def list_files(project_dir):
     return sorted(out)
 
 _SYMBOL_RES = {
-    "ts": re.compile(r"^export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)", re.M),
+    "ts": re.compile(r"^export\s+(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:function|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)", re.M),
     "py": re.compile(r"^(?:class|def)\s+([A-Za-z]\w*)", re.M),
     "go": re.compile(r"^func\s+(?:\([^)]*\)\s*)?([A-Z]\w*)", re.M),
     "rs": re.compile(r"^pub\s+(?:fn|struct|enum|trait|type)\s+([A-Za-z_]\w*)", re.M),
-    "swift": re.compile(r"^(?!\s*(?:private|fileprivate)\b)(?:(?:public|open|internal|final)\s+)*(?:class|struct|enum|protocol|func|actor)\s+([A-Za-z_]\w*)", re.M),
+    # `[ \t]*` after the lookahead: Swift nests declarations inside extensions and types, so
+    # the useful public API of a file is usually indented, not column-0.
+    "swift": re.compile(r"^(?!\s*(?:private|fileprivate)\b)[ \t]*(?:(?:public|open|internal|final)\s+)*(?:class|struct|enum|protocol|func|actor)\s+([A-Za-z_]\w*)", re.M),
     "cs": re.compile(r"^(?:(?:public|internal|private|protected|static|abstract|sealed|partial)\s+)*(?:class|interface|record|struct|enum)\s+([A-Za-z_]\w*)", re.M),
     "rb": re.compile(r"^\s*(?:class|module|def)\s+(?:self\.)?([A-Za-z_]\w*)", re.M),
 }
@@ -218,12 +225,22 @@ def _brain_dir(pdir):
     os.makedirs(d, exist_ok=True)
     return d
 
+def _discard(tmp):
+    """Best-effort removal of a scratch file; never raises (it runs in a `finally`)."""
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+
 def write_layer(pdir, layer):
     path = os.path.join(_brain_dir(pdir), "codelayer.json")
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(layer, f, indent=1, sort_keys=True)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(layer, f, indent=1, sort_keys=True)
+        os.replace(tmp, path)
+    finally:
+        _discard(tmp)
 
 def read_layer(pdir):
     try:
@@ -249,6 +266,8 @@ def split_codemap(text):
     return m.group(1), text[m.end():end], curated
 
 def curated_template(slug):
+    """The curated half of a fresh codemap.md. `{slug}` in the template names the project in
+    the file's leading comment — the curated block otherwise carries no identity at all."""
     text = _read(TEMPLATE_PATH)
     return text.replace("{slug}", slug)
 
@@ -265,6 +284,8 @@ def render_generated(layer, cap=150):
     deps = list(layer.get("deps") or [])
     if len(deps) > DEPS_LIMIT:
         deps = deps[:DEPS_LIMIT] + ["\u2026 (+%d more)" % (len(deps) - DEPS_LIMIT)]
+    # `deps:` is the manifest dependency list, not an import graph: it is what `lint` matches
+    # against concept notes, and what tells a reader which libraries this project buys into.
     header = ["# Code map (generated \u2014 do not edit above the end marker)", "head: %s" % (layer.get("sha") or "-"),
               "deps: %s" % (", ".join(deps) or "-"), ""]
     budget = cap - len(header) - 1
@@ -274,6 +295,14 @@ def render_generated(layer, cap=150):
     # children are single lines; the repo root ("") is never a candidate, so top-level files
     # always survive. Collapsing absorbs every remaining descendant, not just the direct
     # children — otherwise "src/" can end up rendered right above "src/deep/nest/x.ts".
+    #
+    # Cost is O(rounds x len(items)): two cheap full passes per fold (build `owners`, collect
+    # `absorbed`). Measured on a worst-case tree of 2-file leaf directories: 0.08 s at 3k files,
+    # 0.33 s at 6k, 1.3 s at 12k. Replacing the `absorbed` rescan with a per-round ancestor
+    # prefix index was tried and is ~3x SLOWER (building every key's ancestor list costs more
+    # than one C-level prefix scan of the dict), so the rescan stays. This never runs on the
+    # SessionStart path anyway: at codemap.LARGE_REPO_FILES the hook writes a stub and defers
+    # the build to a detached `map --regen`.
     items = dict((f["path"], (_dir_of(f["path"]), _file_line(f), 1)) for f in layer["files"])
     while len(items) > budget:
         owners = {}
@@ -306,9 +335,12 @@ def _codemap_path(pdir):
 
 def _write_codemap(path, text):
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        _discard(tmp)           # a failed replace must not leave codemap.md.tmp in the vault
 
 def ensure(project_dir, pdir, files=None):
     path = _codemap_path(pdir)
@@ -350,7 +382,9 @@ def regenerate(project_dir, pdir, force=False, files=None):
     return True
 
 def _split_cells(line):
-    """Split a '|'-delimited table row on '|' outside '[[...]]' wikilinks (aliases contain '|')."""
+    """(cells, balanced) — split a '|'-delimited table row on '|' outside '[[...]]' wikilinks
+    (aliases contain '|'). `balanced` is False when a '[[' was never closed, which makes every
+    '|' after it ambiguous and the split untrustworthy."""
     cells = []
     cur = []
     depth = 0
@@ -376,7 +410,7 @@ def _split_cells(line):
         cur.append(ch)
         i += 1
     cells.append("".join(cur))
-    return cells
+    return cells, depth == 0
 
 def _table_rows(curated, heading, ncols):
     from brain import vault
@@ -385,9 +419,17 @@ def _table_rows(curated, heading, ncols):
     for line in body.splitlines():
         if not line.startswith("|"):
             continue
-        cells = [c.strip() for c in _split_cells(line.strip().strip("|"))]
-        if len(cells) != ncols or set("".join(cells)) <= set("-: ") or cells[0] in ("module", "question"):
+        raw, balanced = _split_cells(line.strip().strip("|"))
+        cells = [c.strip() for c in raw]
+        if not balanced:
+            # Report it. A hand-written row with a typo'd wikilink used to vanish from the graph
+            # with no trace, which reads as "brain ignores my Modules table".
+            config.log_error("codemap: unbalanced [[ in a '%s' row, skipped: %s" % (heading, line.strip()[:120]))
             continue
+        if len(cells) != ncols or set("".join(cells)) <= set("-: "):
+            continue                                # `|---|---|` separator, or wrong arity
+        if cells[0] in ("module", "question"):
+            continue                                # the template's own header row — expected, not an error
         rows.append(cells)
     return rows
 
