@@ -55,6 +55,24 @@ class MainEntryPointTests(unittest.TestCase):
         with open(os.path.join(self.tmp.name, "data", "brain.log"), encoding="utf-8") as f:
             self.assertIn("kaboom", f.read())
 
+    def test_cli_failure_reports_exit_1_not_success(self):
+        """The hook path is silent-and-0 by contract; the CLI path is 0/1/2, so a crash inside
+        `cli.run` reported as 0 tells the caller the command worked."""
+        import io
+        from contextlib import redirect_stderr
+        mod = self._load_main()
+        original = mod._run
+        mod._run = lambda argv: (_ for _ in ()).throw(RuntimeError("kaboom"))
+        buf = io.StringIO()
+        try:
+            with redirect_stderr(buf):
+                rc = mod.main(["status"])
+            self.assertEqual(rc, 1)
+            self.assertIn("kaboom", buf.getvalue())
+            self.assertEqual(mod.main(["hook", "SessionStart"]), 0)      # hook path unchanged
+        finally:
+            mod._run = original
+
     def test_stdin_none_is_treated_as_empty(self):
         """Claude Code can hand the hook a closed stdin: sys.stdin is None must not raise."""
         import sys as _sys

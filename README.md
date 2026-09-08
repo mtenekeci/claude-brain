@@ -193,7 +193,9 @@ three or more source files and no `## Modules` row yet.
 The graph is cached per project under `<vault>/projects/<slug>/.brain/` and rebuilt whenever
 any input file changes. On a repository with 3000 or more tracked files, session start writes
 the curated scaffold and defers the generated layer to a background `map --regen`, so the
-session-start budget is never at risk; the injection says so when this happens.
+session-start budget is not spent on it; the injection says so when this happens. With
+`async_regen: off` there is no background process to defer to, so that build runs in the
+foreground instead — still bounded by the same file-count limit.
 
 ## Migration from v1
 
@@ -215,11 +217,18 @@ Two things to expect once:
   are still registered in `.claude/settings.json` when the session begins, so both the v1
   script and the v2 plugin hook fire. Migration strips the old entries during that same
   session; every session after it is clean.
-- **Leftover scripts.** v1 copied hook scripts to `~/.claude/brain-*.sh`. `/brain status`
-  lists any that remain, marking which are still referenced by some project.
-  `/brain status --clean-orphans` deletes only the unreferenced ones.
+- **Leftover scripts.** v1 copied four hook scripts to `~/.claude/`
+  (`brain-session-start.sh`, `brain-post-tool-use.sh`, `brain-precompact.sh`,
+  `brain-session-end.sh`). `/brain status` lists any that remain, marking which are still
+  referenced by a project or by your own `settings.json`; `/brain status --clean-orphans`
+  deletes only the unreferenced ones. Those four names are the only files it will ever touch —
+  anything else you keep at `~/.claude/brain-*.sh` is yours.
 
-Vault content is never touched by migration.
+Migration itself rewrites nothing in the vault except the `path:` field above. Separately —
+not part of migration — the first v2 session runs the concept lint, which auto-applies up to
+five manifest-dependency links: a `uses::` line in `context.md`'s `## Architecture` and a
+`## Used by` row in the matching concept note. It says so in the health line, and
+`/brain graph dismiss <slug>` stops any of them coming back.
 
 ## graphify (optional)
 

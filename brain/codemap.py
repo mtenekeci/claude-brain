@@ -290,9 +290,11 @@ def render_generated(layer, cap=150):
     # `absorbed`). Measured on a worst-case tree of 2-file leaf directories: 0.08 s at 3k files,
     # 0.33 s at 6k, 1.3 s at 12k. Replacing the `absorbed` rescan with a per-round ancestor
     # prefix index was tried and is ~3x SLOWER (building every key's ancestor list costs more
-    # than one C-level prefix scan of the dict), so the rescan stays. This never runs on the
-    # SessionStart path anyway: at codemap.LARGE_REPO_FILES the hook writes a stub and defers
-    # the build to a detached `map --regen`.
+    # than one C-level prefix scan of the dict), so the rescan stays. With `async_regen: on` — the
+    # default — it stays off the SessionStart path entirely: at LARGE_REPO_FILES the hook writes
+    # a stub and defers the build to a detached `map --regen`. With `async_regen: off` there is
+    # no background process to defer to, so the hook builds in the foreground; the numbers above
+    # are the budget that costs, which is why LARGE_REPO_FILES bounds it either way.
     items = dict((f["path"], (_dir_of(f["path"]), _file_line(f), 1)) for f in layer["files"])
     while len(items) > budget:
         owners = {}

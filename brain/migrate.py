@@ -6,6 +6,10 @@ _LEGACY_MARKERS = ("/brain-session-start.sh", "/brain-post-tool-use.sh", "/brain
 _SEP_RE = re.compile(r"^---\s*$", re.M)
 
 def slim_block(project_name, slug):
+    """The CLAUDE.md brain block. `templates/CLAUDE.md` is this text with `{project-name}`
+    and `{slug}` placeholders, kept for readers browsing the plugin's templates;
+    `tests/test_migration.py::test_slim_block_matches_template` holds the two byte-identical,
+    which is why the template file itself carries no explanatory comment."""
     return ("# Brain: %s\n\nbrain: %s\n\nVault context, protocol, and code map for this project are injected "
             "automatically by the claude-brain plugin at session start. If this session shows no \"Brain:\" block, "
             "run `/brain status`.\n---\n" % (project_name, slug))

@@ -75,8 +75,6 @@ class SkillDocsTests(unittest.TestCase):
                 nested = tree[top]
                 if sub is None or not nested:
                     continue  # leaf command, or nothing to validate as a nested subcommand
-                if top == "graph" and sub == "ask":
-                    continue  # Task 5 adds `graph ask` in a parallel worktree; allowed even if absent here
                 self.assertIn(sub, nested, "%s invokes `{BRAIN} %s %s` which is not a CLI subcommand" % (path, top, sub))
 
     def test_protocol_rule_lines_appear_verbatim_in_skill_md(self):

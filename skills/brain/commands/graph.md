@@ -17,7 +17,7 @@ Use these instead of raw Grep/Glob whenever you need to find where something liv
 
 ## Then
 
-Nothing mechanical — these are read queries except `dismiss` and `rebuild`, which the CLI handles fully. When `lint` reports candidates, resolve them the same way `/brain sync` does: add a typed link, or `graph dismiss` it.
+Nothing mechanical — these are read queries except `dismiss` and `rebuild`, which the CLI handles fully. When `lint` reports candidates, resolve them the same way `/brain sync` does: add a typed link, or `graph dismiss` it. When it reports **dangling links**, fix the target or remove the link — they are real broken links (a `[[…]]` inside backticks or a fenced block is a syntax example and is never reported). When resolving a candidate means creating a concept note that does not exist yet, start it from `${CLAUDE_PLUGIN_ROOT}/templates/concept.md` and write it to `VAULT_ROOT/concepts/<concept-slug>.md`.
 
 ## Report
 

@@ -165,6 +165,10 @@ def _claim_regen_slot(ctx, enabled):
 
 def _prepare_session_start(ctx):
     """Everything slow or git-touching for SessionStart runs here, BEFORE the session lock."""
+    # os.listdir + getmtime + remove over the whole sessions dir. Harmless in isolation, but it
+    # is I/O, and the one rule of the locked body is that it holds none. Nothing here depends on
+    # this session's state, and prune is mtime-based, so a session started seconds ago is safe.
+    state.prune(days=7)
     # log.md is read ONCE per event: the locked body needs the last entry and prepare needs the
     # entry count, and re-reading it under the lock put file I/O in the critical section.
     log_text = vault.read(ctx.log_path)
@@ -208,7 +212,8 @@ def _prepare_session_start(ctx):
                 # both. Read pre-lock, like everything else here.
                 stored_sha, generated, _ = codemap.split_codemap(
                     vault.read(os.path.join(ctx.pdir, "codemap.md")))
-                pre["map_fresh"] = bool(generated.strip()) and stored_sha == pre["regen_key"]
+                pre["map_generated"] = bool(generated.strip())
+                pre["map_fresh"] = pre["map_generated"] and stored_sha == pre["regen_key"]
                 pre["want_regen"] = not pre["map_fresh"]
             else:
                 # No background process will ever fill the stub in, so the foreground build is
@@ -250,7 +255,6 @@ def on_session_start(ctx):
     _prepare_session_start(). context.md is read HERE (not in prepare) because lint's
     auto-apply may have just rewritten it."""
     source = str(ctx.payload.get("source") or "startup")
-    state.prune(days=7)
     ctx.state.stop_blocks_this_turn = 0
     migrated_line = ctx.pre.get("migrated_line", "")
     if ctx.state.log_entries_at_start < 0:
@@ -300,9 +304,15 @@ def on_session_start(ctx):
         # the file is too big and only /brain sync can shrink it.
         parts += ["", "Brain: context.md oversize: %d KB" % over_kb]
     if deferred:
-        parts += ["", "Brain: code map deferred — this repo has %d+ tracked files, so codemap.md "
-                      "holds only the curated block for now. Run `%s map --regen` if you need the "
-                      "generated tree this session." % (codemap.LARGE_REPO_FILES, cli_command())]
+        # Two different states reach here: no generated block at all (a fresh stub), and a
+        # complete-but-stale one. Saying "holds only the curated block" in the second case is
+        # simply false — the map is there, it just predates the current tree. The flag comes
+        # from prepare; re-reading codemap.md here would be file I/O inside the lock.
+        what = ("codemap.md is stale — it describes an earlier commit" if ctx.pre.get("map_generated")
+                else "codemap.md holds only the curated block for now")
+        parts += ["", "Brain: code map deferred — this repo has %d+ tracked files, so %s. Run "
+                      "`%s map --regen` if you need the current generated tree this session."
+                  % (codemap.LARGE_REPO_FILES, what, cli_command())]
     if source in ("compact", "resume"):
         fm, _ = vault.parse_frontmatter(context_text)
         expected = fm.get("branch") or "unset"

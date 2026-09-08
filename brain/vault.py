@@ -212,7 +212,12 @@ def atomic_write(path, text):
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:     # fdopen owns fd and closes it
+        try:
+            f = os.fdopen(fd, "w", encoding="utf-8")        # from here the file object owns fd
+        except BaseException:
+            os.close(fd)                                    # …but only if fdopen itself succeeded
+            raise
+        with f:
             f.write(text)
         try:
             mode = stat.S_IMODE(os.stat(path).st_mode)      # rewrite: keep the note's own bits
