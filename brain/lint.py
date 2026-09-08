@@ -8,6 +8,7 @@ SessionStart path, where an exception would cost the user their context injectio
 import json, os, re
 from brain import config, vault, graph, codemap
 
+AUTO_APPLY_LIMIT = 5    # auto-apply edits shared concept notes: bound how many one pass rewrites
 CANDIDATE_LIMIT = 5
 DANGLING_RENDER_LIMIT = 8
 RENDER_LINE_LIMIT = 40
@@ -155,7 +156,7 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
     slugs = _project_slugs(vault_root) if all_projects else [slug]
     if slug not in slugs:
         slugs = [slug] + slugs
-    result = {"auto_applied": [], "candidates": [], "stale": [], "dangling": [],
+    result = {"auto_applied": [], "auto_pending": 0, "candidates": [], "stale": [], "dangling": [],
               "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs, "_graph": g}
     for s in slugs:
         # Other projects build from their own vault dir; build()/load() tolerate project_dir=None
@@ -172,6 +173,9 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
             n = gg.nodes[cid]
             if cid.split(":", 1)[1] in dismissed:
                 continue        # dismissal is a standing "no" — auto-apply edits shared concept notes
+            if len(result["auto_applied"]) >= AUTO_APPLY_LIMIT:
+                result["auto_pending"] += 1     # deferred to the next run, and reported meanwhile
+                continue
             try:
                 wrote = apply_auto(vault_root, s, cid.split(":", 1)[1], n.name,
                                    "dependency `%s`" % dep, add_link=(cid not in typed))
@@ -198,18 +202,31 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
     return result
 
 def health_line(res):
+    """One line, or "" when there is nothing to say. Auto-applied writes are reported too:
+    they edit shared concept notes, so the user has to be able to see them happen."""
     n = len(res.get("candidates") or [])
     m = len(res.get("stale") or [])
     k = len(res.get("dangling") or [])
-    if not (n or m or k):
+    a = len(res.get("auto_applied") or [])
+    p = int(res.get("auto_pending") or 0)
+    if not (n or m or k or a or p):
         return ""
-    return "Brain: graph health — %d unlinked concept%s, %d stale Used-by entr%s, %d dangling link%s (run /brain sync)" % (
-        n, "" if n == 1 else "s", m, "y" if m == 1 else "ies", k, "" if k == 1 else "s")
+    parts = []
+    if n or m or k:
+        parts.append("%d unlinked concept%s, %d stale Used-by entr%s, %d dangling link%s" % (
+            n, "" if n == 1 else "s", m, "y" if m == 1 else "ies", k, "" if k == 1 else "s"))
+    if a:
+        parts.append("%d concept link%s auto-applied" % (a, "" if a == 1 else "s"))
+    if p:
+        parts.append("%d pending" % p)
+    return "Brain: graph health — " + ", ".join(parts) + " (run /brain sync)"
 
 def render(res):
     lines = ["lint: projects %s" % ", ".join(res.get("projects") or [])]
     if res.get("auto_applied"):
-        lines.append("auto-linked (manifest deps): " + ", ".join(res["auto_applied"]))
+        pending = res.get("auto_pending") or 0
+        lines.append("auto-linked (manifest deps): " + ", ".join(res["auto_applied"])
+                     + (" (+%d deferred to the next run)" % pending if pending else ""))
     c = res.get("candidates") or []
     if c:
         lines.append("candidates (confirm with a typed link, or dismiss):")

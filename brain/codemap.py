@@ -252,46 +252,44 @@ def curated_template(slug):
     text = _read(TEMPLATE_PATH)
     return text.replace("{slug}", slug)
 
-def _tree_lines(layer):
-    """One line per file: '<path>  (<symbols>)'; directories are implicit via sorted paths."""
-    lines = []
-    for f in layer["files"]:
-        syms = ", ".join(f["symbols"])
-        lines.append("%s  (%s)" % (f["path"], syms) if syms else f["path"])
-    return lines
+DEPS_LIMIT = 20         # a monorepo manifest can list hundreds; the map is a map, not an inventory
+
+def _dir_of(path):
+    return path.rsplit("/", 1)[0] if "/" in path else ""
+
+def _file_line(f):
+    syms = ", ".join(f["symbols"])
+    return "%s  (%s)" % (f["path"], syms) if syms else f["path"]
 
 def render_generated(layer, cap=150):
-    header = ["# Code map (generated — do not edit above the end marker)", "head: %s" % (layer.get("sha") or "-"),
-              "deps: %s" % (", ".join(layer.get("deps") or []) or "-"), ""]
-    files = list(layer["files"])
+    deps = list(layer.get("deps") or [])
+    if len(deps) > DEPS_LIMIT:
+        deps = deps[:DEPS_LIMIT] + ["\u2026 (+%d more)" % (len(deps) - DEPS_LIMIT)]
+    header = ["# Code map (generated \u2014 do not edit above the end marker)", "head: %s" % (layer.get("sha") or "-"),
+              "deps: %s" % (", ".join(deps) or "-"), ""]
     budget = cap - len(header) - 1
-    # Group by top-level directory (first path segment, or '.' for root files); collapse the largest groups first
-    groups = {}
-    for f in files:
-        top = f["path"].split("/", 1)[0] if "/" in f["path"] else "."
-        groups.setdefault(top, []).append(f)
-    collapsed = set()
-    def total():
-        return sum(1 if g in collapsed else len(fs) for g, fs in groups.items())
-    order = sorted(groups, key=lambda g: (-len(groups[g]), g))
-    for g in order:
-        if total() <= budget:
-            break
-        if len(groups[g]) > 1:
-            collapsed.add(g)
-    body = []
-    for f in files:
-        top = f["path"].split("/", 1)[0] if "/" in f["path"] else "."
-        if top in collapsed:
-            continue
-        syms = ", ".join(f["symbols"])
-        body.append("%s  (%s)" % (f["path"], syms) if syms else f["path"])
-    for g in sorted(collapsed):
-        body.append("%s/  (%d files, collapsed)" % (g, len(groups[g])))
-    body.sort()
+    # key -> (owning directory, rendered line, files represented). A directory "owns" only the
+    # lines directly beneath it, so each round collapses the deepest, fattest directory; a
+    # parent becomes collapsible only once its children are single lines. The repo root ("")
+    # is never a candidate, so top-level files always survive.
+    items = dict((f["path"], (_dir_of(f["path"]), _file_line(f), 1)) for f in layer["files"])
+    while len(items) > budget:
+        owners = {}
+        for key, (parent, _, _n) in items.items():
+            if parent:
+                owners.setdefault(parent, []).append(key)
+        cand = sorted((-len(v), d) for d, v in owners.items() if len(v) > 1)
+        if not cand:
+            break                       # nothing left to fold — the trailer below takes over
+        d = cand[0][1]
+        total = sum(items[k][2] for k in owners[d])
+        for k in owners[d]:
+            del items[k]
+        items[d + "/"] = (_dir_of(d), "%s/  (%d files, collapsed)" % (d, total), total)
+    body = sorted(line for _, line, _ in items.values())
     if len(body) > budget:
         omitted = len(body) - (budget - 1)
-        body = body[:budget - 1] + ["… (%d more files not shown — see .brain/codelayer.json)" % omitted]
+        body = body[:budget - 1] + ["\u2026 (%d more files not shown \u2014 see .brain/codelayer.json)" % omitted]
     return "\n".join(header + body) + "\n"
 
 def render_codemap(layer, curated):

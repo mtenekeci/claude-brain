@@ -24,6 +24,8 @@ def is_done_signal(prompt):
     p = (prompt or "").lower()
     if len(p) >= 80:
         return False
+    if p.rstrip().endswith("?"):
+        return False        # "is this done?" asks about the work, it does not sign it off
     for sig in DONE_SIGNALS:
         m = re.search(r"\b" + re.escape(sig) + r"\b", p)
         if not m:

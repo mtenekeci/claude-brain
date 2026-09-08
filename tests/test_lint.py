@@ -96,6 +96,31 @@ class LintTests(unittest.TestCase):
         self.assertNotIn("projects/demo/context", vault.get_section(      # shared note left alone
             vault.read(os.path.join(self.vault, "concepts", "jest.md")), "Used by"))
 
+    def test_auto_apply_is_capped_and_the_remainder_is_reported(self):
+        """Auto-apply edits shared concept notes. A manifest with dozens of matching concepts
+        must not rewrite them all in one silent SessionStart pass."""
+        deps = ["dep%d" % i for i in range(8)]
+        with open(os.path.join(self.repo, "package.json"), "w") as f:
+            f.write('{"name":"demo","dependencies":{%s}}' % ", ".join('"%s":"^1"' % d for d in deps))
+        for d in deps:
+            self._concept(d, d.upper())
+        codemap.regenerate(self.repo, self.pdir, force=True)
+        g = graph.load(self.vault, "demo", self.repo, force=True)
+        res = lint.run(self.vault, "demo", self.repo, g)
+        self.assertEqual(len(res["auto_applied"]), lint.AUTO_APPLY_LIMIT)
+        self.assertEqual(res["auto_applied"], sorted(res["auto_applied"]))     # deterministic order
+        self.assertEqual(res["auto_pending"], 3)                               # 8 deps − 5 applied
+        line = lint.health_line(res)
+        self.assertIn("5 concept links auto-applied", line)
+        self.assertIn("3 pending", line)
+        # the next run picks up where this one stopped
+        res2 = lint.run(self.vault, "demo", self.repo, graph.load(self.vault, "demo", self.repo, force=True))
+        self.assertEqual(len(res2["auto_applied"]), 3)
+        self.assertEqual(res2["auto_pending"], 0)
+        self.assertNotIn("pending", lint.health_line(res2))
+        self.assertIn("3 concept links auto-applied", lint.health_line(res2))
+        self.assertEqual(lint.health_line(dict(res2, auto_applied=["one"])).count("1 concept link auto-applied"), 1)
+
     def test_session_start_health_line(self):
         r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         self.assertIn("Brain: graph health —", r.stdout)

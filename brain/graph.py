@@ -4,7 +4,6 @@ from collections import deque
 from brain import codemap
 from brain import vault as vt
 
-NODE_TYPES = ("project", "concept", "decision", "question", "module", "section", "file", "symbol")
 TYPED = ("uses", "depends-on", "decided-by", "implements", "see")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#([^\]|]*))?(?:\|([^\]]*))?\]\]")
 TYPED_LINK_RE = re.compile(r"\b(uses|depends-on|decided-by|implements|see)::\s*((?:\[\[[^\]]+\]\][ \t,]*)+)")
@@ -12,6 +11,8 @@ _FENCE = "`" * 3
 # The trailing newline is deliberately left in place: removing a block must not pull the
 # following line up onto the one before the fence.
 _FENCE_RE = re.compile("^" + _FENCE + ".*?^" + _FENCE + r"[ \t]*$", re.S | re.M)
+# `npm test` is a command, not a mention of a concept called "test".
+_CODE_SPAN_RE = re.compile(r"`[^`\n]+`")
 
 def slugify(s):
     s = re.sub(r"[^a-z0-9]+", "-", (s or "").lower())
@@ -168,10 +169,17 @@ def _bullet_title(b):
     m = re.match(r"\*\*(.+?)\*\*", b)
     return m.group(1).strip() if m else None
 
+# Vault areas the graph deliberately does not model: a link into them is not a broken link.
+_NON_NODE_PREFIXES = ("_system",)
+
 def _link_edges(g, src, text, project_slug):
     for etype, raw in parse_links(text):
         dst = resolve_link(raw, project_slug)
         if dst is None:
+            # A bare [[Name]] or an unmodelled path shape. Recorded so `graph lint` can surface
+            # the typo instead of the link vanishing without trace.
+            if raw.partition("#")[0].strip("/").split("/")[0] not in _NON_NODE_PREFIXES:
+                g.record_dangling(src, raw)
             continue
         if dst.startswith("section:") and not g.has(dst):
             other = dst.split(":", 1)[1].split("/", 1)[0]
@@ -185,7 +193,7 @@ def _link_edges(g, src, text, project_slug):
 
 def mention_edges(g, texts, project_slug):
     prose = strip_fences("\n".join(texts))
-    prose = WIKILINK_RE.sub(" ", prose)
+    prose = _CODE_SPAN_RE.sub(" ", WIKILINK_RE.sub(" ", prose))
     src = node_id("project", project_slug)
     for n in list(g.nodes.values()):
         if n.type != "concept":
@@ -239,8 +247,13 @@ def build_vault_layer(g, vault_root, slug):
         g.add_edge(pid, sid, "contains")
     for hslug, body in _section_bodies(arch).items():
         _link_edges(g, node_id("section", "%s/%s" % (slug, hslug)), body, slug)
-    # context.md links (outside decisions/questions bullets → attributed to the project)
-    _link_edges(g, pid, strip_fences(ctx), slug)
+    # context.md links, minus the two bullet sections whose links already belong to the
+    # decision/question nodes built above — scanning them again duplicated every such edge
+    # onto the project node.
+    ctx_rest = ctx
+    for sec in ("Decisions", "Open Questions"):
+        ctx_rest = vt.replace_section(ctx_rest, sec, "")
+    _link_edges(g, pid, strip_fences(ctx_rest), slug)
     mention_edges(g, [ctx, arch], slug)
     return g
 
@@ -292,7 +305,8 @@ def inputs_mtime(vault_root, slug):
     safe direction. The cache itself lives in `.brain/` and is deliberately not an input, so
     writing it cannot invalidate itself."""
     pdir = os.path.join(vault_root, "projects", slug)
-    paths = [os.path.join(pdir, n) for n in ("context.md", "architecture.md", "codemap.md")] + [os.path.join(pdir, ".brain", "codelayer.json")]
+    # pdir itself: deleting an input changes no surviving file's mtime, only the directory's.
+    paths = [pdir] + [os.path.join(pdir, n) for n in ("context.md", "architecture.md", "codemap.md")] + [os.path.join(pdir, ".brain", "codelayer.json")]
     cdir = os.path.join(vault_root, "concepts")
     if os.path.isdir(cdir):
         paths.append(cdir); paths += [os.path.join(cdir, f) for f in os.listdir(cdir)]
@@ -337,15 +351,16 @@ FIND_LIMIT, NEAR_LIMIT, TOP_LIMIT = 15, 40, 12
 def _haystack(n):
     """(strong, weak) name lists. Strong names can score exact/prefix; weak ones only substring.
 
-    A symbol's basename/stem come from its *file*, not from itself — counting them as strong
-    would make every symbol in session.ts an exact hit for "session", outranking the file.
+    A symbol matches on its OWN name and nothing else: its id is "<file path>#<name>" and its
+    `path` is the file's, so counting either made every symbol in session.ts a "session" hit —
+    TTL and refresh crowding out the file node they live in.
     """
+    ident = n.id.split(":", 1)[1].lower()
+    if n.type == "symbol":
+        return [(n.name or "").lower(), ident.split("#", 1)[-1]] + [a.lower() for a in n.aliases], []
     base = os.path.basename(n.path or "")
-    strong = [(n.name or "").lower(), n.id.split(":", 1)[1].lower()] + [a.lower() for a in n.aliases]
     weak = [base.lower(), os.path.splitext(base)[0].lower(), (n.path or "").lower()]
-    if n.type != "symbol":
-        strong += weak[:2]
-    return strong, weak
+    return [(n.name or "").lower(), ident] + [a.lower() for a in n.aliases] + weak[:2], weak
 
 def _score(n, term):
     """3 = exact id/name/alias/filename match, 2 = prefix, 1 = substring (path included), 0 = no match."""

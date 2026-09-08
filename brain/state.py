@@ -8,6 +8,9 @@ _DEFAULTS = dict(
     last_work_at=0.0, last_vault_write=0.0,
     edited_files=[], commit_subjects=[], injected=[],
     commits_since_vault_write=0, source_edits_since_vault_write=0,
+    # codemap_stale: reserved — set when a large repo deferred its build or a source file was
+    # edited, so a later consumer (a /brain status line, a Stop-gate nudge) can say so. Written
+    # today, not yet read; kept deliberately rather than dropped and re-added.
     stop_blocks_this_turn=0, codemap_stale=False, backend_fallbacks=0,
     last_head_sha="", log_entries_at_start=-1, last_nudge_bucket=0, vault_writes_at_last_nudge=0,
     last_regen_spawn_at=0.0,

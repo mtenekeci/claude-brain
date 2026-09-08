@@ -130,6 +130,36 @@ class GraphCarryOverTests(unittest.TestCase):
         self.assertEqual(len(g.dangling), len(set(g.dangling)))
         self.assertTrue(all(len(x) == 2 and isinstance(x[1], str) for x in g.dangling))
 
+    def test_decision_bullet_links_are_not_double_counted(self):
+        """A link inside a Decisions/Open Questions bullet belongs to that bullet's node.
+        Scanning the whole context.md for the project node too produced a second, misleading
+        project→concept edge for every decision that cites a concept."""
+        ctx = os.path.join(self.vault, "projects", "demo", "context.md")
+        text = open(ctx, encoding="utf-8").read().replace(
+            "- **Use Postgres (2026-01-02)**: because.",
+            "- **Use Postgres (2026-01-02)**: because. uses:: [[concepts/nextauth|NextAuth]]")
+        with open(ctx, "w", encoding="utf-8") as f: f.write(text)
+        g = graph.Graph(); graph.build_vault_layer(g, self.vault, "demo")
+        # (the fixture's architecture.md ## Auth section links NextAuth too — that one is its own)
+        edges = [e.src for e in g.edges if e.dst == "concept:nextauth" and e.type == "uses"
+                 and not e.src.startswith("section:")]
+        self.assertEqual(edges, ["decision:use-postgres-2026-01-02"])
+
+    def test_mentions_ignore_inline_code_spans(self):
+        with open(os.path.join(self.vault, "concepts", "test.md"), "w", encoding="utf-8") as f:
+            f.write("---\nconcept: test\ntype: library\n---\n\n# test\n")
+        g = self._build("\n## Commands\nRun `npm test` before pushing.\n")
+        self.assertIn("concept:test", g.nodes)
+        self.assertNotIn(("project:demo", "concept:test", "mentions"), {(e.src, e.dst, e.type) for e in g.edges})
+        g2 = self._build("\n## Prose\nWe rely on test for everything.\n")
+        self.assertIn(("project:demo", "concept:test", "mentions"), {(e.src, e.dst, e.type) for e in g2.edges})
+
+    def test_unresolvable_wikilink_is_recorded_as_dangling(self):
+        g = self._build("\n## Loose ends\nsee:: [[Name]] and [[_system/project-index|Index]]\n")
+        self.assertIn(("section:demo/loose-ends", "Name"), g.dangling)
+        # _system/ is vault infrastructure, deliberately not a graph node — not a broken link
+        self.assertFalse([d for d in g.dangling if "_system" in d[1]])
+
     def test_concept_ids_use_slugified_stem(self):
         with open(os.path.join(self.vault, "concepts", "Auth Flow.md"), "w", encoding="utf-8") as f:
             f.write("---\nconcept: Auth Flow\ntype: subsystem\n---\n\n# Auth Flow\n")
@@ -178,8 +208,10 @@ class CodeLayerAndQueryTests(unittest.TestCase):
         # match in any strong sense and must not tie with the file or outrank SessionStore.
         self.assertEqual(graph._score(self.g.nodes["file:src/auth/session.ts"], "session"), 3)
         self.assertEqual(graph._score(self.g.nodes["symbol:src/auth/session.ts#SessionStore"], "session"), 2)
-        self.assertEqual(graph._score(self.g.nodes["symbol:src/auth/session.ts#TTL"], "session"), 1)
-        self.assertLess(ids.index("symbol:src/auth/session.ts#SessionStore"), ids.index("symbol:src/auth/session.ts#TTL"))
+        # …and at no tier at all: a symbol is matched on its OWN name, never on its file's.
+        self.assertEqual(graph._score(self.g.nodes["symbol:src/auth/session.ts#TTL"], "session"), 0)
+        self.assertNotIn("symbol:src/auth/session.ts#TTL", ids)
+        self.assertNotIn("symbol:src/auth/session.ts#refresh", ids)
         self.assertEqual([x.id for x in graph.find(self.g, "pg")][0], "concept:postgresql")   # alias exact
         self.assertEqual(graph.find(self.g, "zzz"), [])
         self.assertTrue(all(x.type == "concept" for x in graph.find(self.g, "post", type="concept")))
@@ -227,6 +259,16 @@ class CodeLayerAndQueryTests(unittest.TestCase):
         for bad in ("[]", '{"built_at": 1e18, "graph": null}'):
             with open(cache, "w", encoding="utf-8") as f: f.write(bad)
             self.assertIn("section:demo/zzz", graph.load(self.vault, "demo", self.repo).nodes)
+
+    def test_cache_invalidates_on_file_deletion(self):
+        """Deleting an input leaves every surviving file's mtime untouched — only the vault
+        project directory's own mtime moves, so it has to be an input too."""
+        g1 = graph.load(self.vault, "demo", self.repo)
+        self.assertIn("section:demo/auth", g1.nodes)
+        os.remove(os.path.join(self.pdir, "architecture.md"))
+        g2 = graph.load(self.vault, "demo", self.repo)
+        self.assertNotIn("section:demo/auth", g2.nodes)
+        self.assertNotIn("section:demo/storage", g2.nodes)
 
     def test_cache_roundtrip_and_invalidation(self):
         g1 = graph.load(self.vault, "demo", self.repo)

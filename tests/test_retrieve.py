@@ -20,6 +20,10 @@ class TokenTests(unittest.TestCase):
         self.assertFalse(retrieve.is_done_signal("abandoned"))
         self.assertFalse(retrieve.is_done_signal("no thanks"))
         self.assertTrue(retrieve.is_done_signal("no problem, ship it"))
+        # a trailing '?' makes it a question, not a sign-off
+        self.assertFalse(retrieve.is_done_signal("is this done?"))
+        self.assertFalse(retrieve.is_done_signal("looks good?  "))
+        self.assertTrue(retrieve.is_done_signal("looks good"))
 
 class RetrieveTests(unittest.TestCase):
     def setUp(self):

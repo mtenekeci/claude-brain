@@ -4,6 +4,11 @@ import os, re
 _BRAIN_RE = re.compile(r"^brain:\s*([A-Za-z0-9._-]+)\s*$", re.M)
 _LEGACY_RE = re.compile(r"^vault:\s*(\S.*?)\s*$", re.M)
 
+def valid_slug(slug):
+    """A slug is joined onto <vault>/projects/ as a directory name. `.`, `..` and anything
+    with a separator in it would silently resolve outside that directory."""
+    return bool(slug) and not slug.startswith(".") and "/" not in slug and os.sep not in slug
+
 class Project(object):
     def __init__(self, slug, legacy, project_dir, claude_md):
         self.slug = slug
@@ -39,12 +44,12 @@ def _from_dir(d):
         return None
     head, _ = split_brain_block(text)
     m = _BRAIN_RE.search(head)
-    if m:
+    if m and valid_slug(m.group(1)):
         return Project(m.group(1), False, d, path)
     m = _LEGACY_RE.search(head)
     if m:
         slug = m.group(1).rstrip("/").split("/")[-1]
-        if slug:
+        if valid_slug(slug):
             return Project(slug, True, d, path)
     return None
 

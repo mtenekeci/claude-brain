@@ -29,6 +29,21 @@ class ProjectTests(unittest.TestCase):
             with open(os.path.join(tmp, "CLAUDE.md"), "w") as f: f.write("# Just a repo\n")
             self.assertIsNone(project.resolve_project(tmp))
 
+    def test_rejects_path_shaped_slugs(self):
+        """A slug becomes a vault directory name: `..` or `a/b` would escape projects/."""
+        with tempfile.TemporaryDirectory() as tmp:
+            for bad in ("..", ".", ".hidden", "a/b", "../../etc"):
+                with open(os.path.join(tmp, "CLAUDE.md"), "w") as f:
+                    f.write("# Brain: x\n\nbrain: %s\n---\n" % bad)
+                self.assertIsNone(project.resolve_project(tmp), bad)
+            for bad in ("/v/projects/..", "/v/projects/."):
+                with open(os.path.join(tmp, "CLAUDE.md"), "w") as f:
+                    f.write("# Brain: x\n\nvault: %s\n---\n" % bad)
+                self.assertIsNone(project.resolve_project(tmp), bad)
+            with open(os.path.join(tmp, "CLAUDE.md"), "w") as f:
+                f.write("# Brain: x\n\nbrain: ok-slug.1\n---\n")
+            self.assertEqual(project.resolve_project(tmp).slug, "ok-slug.1")
+
     def test_split_brain_block(self):
         text = "# Brain: x\n\nbrain: x\n---\n# Rest\nmore\n"
         head, rest = project.split_brain_block(text)

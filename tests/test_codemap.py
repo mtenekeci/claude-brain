@@ -121,6 +121,39 @@ class CodemapRenderTests(unittest.TestCase):
         self.assertIn("big/  (200 files, collapsed)", out)
         self.assertIn("small/a.ts  (a)", out)
 
+    def _nested_layer(self, per_dir=50):
+        files = [{"path": "src/%s/f%03d.ts" % (d, i), "lines": 1, "symbols": ["s"], "imports": []}
+                 for d in ("auth", "db", "ui", "api") for i in range(per_dir)]
+        files.append({"path": "package.json", "lines": 1, "symbols": [], "imports": []})
+        return {"sha": "x", "files": files, "deps": [], "generated_at": 0}
+
+    def test_render_generated_collapses_the_deepest_dirs_first(self):
+        """Collapsing is iterative and depth-aware: the four leaf dirs go, not their parent —
+        `src/` alone would throw away the whole structure when four lines already fit."""
+        out = codemap.render_generated(self._nested_layer(), cap=40)
+        lines = out.rstrip("\n").split("\n")
+        self.assertLessEqual(len(lines), 40)
+        for d in ("api", "auth", "db", "ui"):
+            self.assertIn("src/%s/  (50 files, collapsed)" % d, lines)
+        self.assertNotIn("src/  (200 files, collapsed)", lines)
+        self.assertIn("package.json", lines)                      # root files never collapse
+
+    def test_render_generated_leaves_the_tree_expanded_when_it_fits(self):
+        # 201 lines + 4 header lines + the trailer slot, so the cap has to clear ~206.
+        out = codemap.render_generated(self._nested_layer(), cap=250)
+        self.assertNotIn("collapsed", out)
+        self.assertNotIn("not shown", out)
+        self.assertIn("src/auth/f000.ts  (s)", out)
+        self.assertIn("src/ui/f049.ts  (s)", out)
+
+    def test_render_generated_caps_the_deps_line(self):
+        layer = {"sha": "x", "files": [], "deps": ["dep%02d" % i for i in range(25)], "generated_at": 0}
+        deps_line = [l for l in codemap.render_generated(layer).splitlines() if l.startswith("deps: ")][0]
+        names = deps_line[len("deps: "):].split(", ")
+        self.assertEqual(len(names), 21)
+        self.assertEqual(names[:20], ["dep%02d" % i for i in range(20)])
+        self.assertEqual(names[20], "… (+5 more)")
+
     def test_render_generated_reports_omitted_files(self):
         files = [{"path": "d%03d/a.ts" % i, "lines": 1, "symbols": ["a"], "imports": []} for i in range(200)]
         layer = {"sha": "x", "files": files, "deps": [], "generated_at": 0}
