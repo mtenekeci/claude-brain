@@ -192,6 +192,24 @@ env BRAIN_CONFIG="$S/brain.config" CLAUDE_PLUGIN_DATA="$S/data" \
 
 Expect: first line is `project smoke  projects/smoke/context.md  — smoke  (N)`.
 
+### Check 10 — SubagentStop reminder
+
+Same sandbox and flags as Checks 6-9, plus `Agent,Task` in `--allowedTools`.
+
+Prompt: `Step 1: use the Task tool with subagent_type general-purpose and this exact prompt: 'Do no work. Reply with exactly two lines. Line 1: SUBAGENT OK. Line 2: Vault notes: none.' Step 2: after it returns, report whether YOU (the top-level assistant) received, at any point after the subagent finished, any message or context line beginning with the word Brain: that tells you to fold vault notes into architecture.md. If yes, reply 'GOT IT: ' followed by that line verbatim. If no, reply exactly 'NO BRAIN LINE'. Do not dispatch a second subagent.`
+
+Expect (as designed): the parent quotes `Brain: subagent '<type>' reported vault
+notes — fold them into .../architecture.md ...`.
+
+Observed instead: see "Last run" below — the text is delivered to the *subagent*,
+not the parent. Use `--model sonnet` (haiku is too unreliable at reporting what it
+did or did not receive), and note that `-p` mode prints only the final assistant
+turn, so a negative answer alone is not proof the hook never fired. To see whether
+it fired at all, temporarily add a `config.log_error(...)` line at the top of
+`on_subagent_stop` and read `$CLAUDE_PLUGIN_DATA/brain.log` — and note that Claude
+Code sets `CLAUDE_PLUGIN_DATA` itself (to `~/.claude/plugins/data/brain-inline`),
+overriding the `$S/data` value the commands above export, so look there.
+
 ## Last run
 
 - **Date:** 2026-09-07
@@ -214,3 +232,13 @@ Expect: first line is `project smoke  projects/smoke/context.md  — smoke  (N)`
 - **Check 9 (`graph top` CLI): PASS.** First line of output: `project smoke  projects/smoke/context.md  — smoke  (4)`, ahead of `module auth-flow`, the decision, the question, and the architecture section node.
 - **Bugs found:** none in `brain/` — the Check 6 surprise was a prompt-authoring issue (token-budget interaction with prompt wording), not a defect; no code or test change was warranted.
 - **Unit tests:** full suite green both plain and with `CLAUDE_PROJECT_DIR=$PWD` set (154 tests, including the 3 new `tests/test_budgets.py` cases).
+
+### Check 10 (final fix wave, SubagentStop verification)
+
+- **Date:** 2026-09-08
+- **Mode:** `--plugin-dir`, third scratch sandbox built via `tests.helpers` exactly as Checks 6-9 describe; `brain.config` had `"async_regen": false`.
+- **Check 10 (SubagentStop reminder): FAIL as designed — the reminder does not reach the parent.** Four runs (haiku ×3, sonnet ×1) all ended in `NO BRAIN LINE`. Instrumenting `on_subagent_stop` with a `config.log_error` of the payload proved the hook *does* fire and *does* emit: the payload carries `last_assistant_message` (`'SUBAGENT OK.\nVault notes: none.'`), so the `"Vault notes:"` guard passed and the JSON was returned. The give-away is the *next* two `SubagentStop` payloads in the same run: `'I have no vault notes to fold in — my prior report explicitly said "Vault notes: none." Nothing to update in architecture.md or codemap.md.'` and `'I\'ll note again: I did no research and reported no vault notes ("none") …'`. That is the **subagent** answering our reminder. So Claude Code feeds `SubagentStop` output back into the finished subagent's own loop (the way `Stop` output does for the main agent), not into the parent turn. This holds for `hookSpecificOutput.additionalContext` and for a top-level `systemMessage` alike — both were present on the last two runs and neither surfaced to the parent.
+- **Change made:** `on_subagent_stop` now returns the text on **both** channels (`hookSpecificOutput.additionalContext` and a top-level `systemMessage`), per the fix-wave instruction. It did not change the observed outcome; it is kept because `systemMessage` is the documented parent-facing channel and costs nothing if a later Claude Code version honours it.
+- **Not a loop:** the reminder costs the subagent one or two extra turns and then stops — its follow-up replies do not contain the literal `Vault notes:`, so the guard in `on_subagent_stop` returns EMPTY for them. Bounded, but the reminder is currently addressed to the wrong agent, and a subagent cannot act on it (it is told not to write to the vault by `briefing.text`). **Open issue for Plan 3:** either drop `SubagentStop` and rely on the parent's own `## Vault notes:` convention (already in the briefing), or re-word the text so it reads sensibly to the subagent that actually receives it.
+- **Environment note recorded above:** Claude Code overrides `CLAUDE_PLUGIN_DATA` with `~/.claude/plugins/data/brain-inline`; the `$S/data` export in the sandbox recipe has no effect on where hooks write state or `brain.log`.
+- **Unit tests:** 167 green, plain and with `CLAUDE_PROJECT_DIR=$PWD`.

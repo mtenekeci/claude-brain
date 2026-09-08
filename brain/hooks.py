@@ -558,8 +558,15 @@ def on_subagent_stop(ctx):
     if "Vault notes:" not in msg:
         return EMPTY
     who = str(ctx.payload.get("agent_type") or "subagent")
-    return HookResult(json={"hookSpecificOutput": {"hookEventName": "SubagentStop", "additionalContext":
-        "Brain: subagent '%s' reported vault notes — fold them into %s / codemap.md ## Modules now (a concept note only if you'd link it from more than one place)." % (who, ctx.arch_path)}})
+    text = ("Brain: subagent '%s' reported vault notes — fold them into %s / codemap.md ## Modules "
+            "now (a concept note only if you'd link it from more than one place)." % (who, ctx.arch_path))
+    # Both channels on purpose. SMOKE.md check 10 measured what actually happens: neither shape
+    # reaches the PARENT turn — the text is fed back into the finished subagent's own loop, which
+    # answers it and stops (the "Vault notes:" guard fails on that second reply, so it never
+    # loops). systemMessage is added because it is the documented parent-facing channel and costs
+    # nothing; the honest status is recorded in SMOKE.md "Last run".
+    return HookResult(json={"hookSpecificOutput": {"hookEventName": "SubagentStop", "additionalContext": text},
+                            "systemMessage": text})
 
 # One registry, defined after every handler. hooks/hooks.json registers exactly these nine
 # events; the parity test in tests/test_hooks_session.py keeps the two in step.

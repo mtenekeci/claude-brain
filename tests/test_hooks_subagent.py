@@ -19,7 +19,11 @@ class SubagentHookTests(unittest.TestCase):
 
     def test_subagent_stop_reminds_only_with_vault_notes(self):
         r = hooks.dispatch("SubagentStop", payload("SubagentStop", self.repo, agent_id="a1", agent_type="Explore", last_assistant_message="Done.\n\nVault notes:\n- all DB calls go through db.ts"))
-        self.assertIn("reported vault notes", r.json["hookSpecificOutput"]["additionalContext"]); self.assertIn("Explore", r.json["hookSpecificOutput"]["additionalContext"])
+        ac = r.json["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("reported vault notes", ac); self.assertIn("Explore", ac)
+        # SMOKE.md check 10: the parent never saw SubagentStop's additionalContext, so the same
+        # text also goes out as a top-level systemMessage.
+        self.assertEqual(r.json["systemMessage"], ac)
         self.assertIsNone(hooks.dispatch("SubagentStop", payload("SubagentStop", self.repo, agent_id="a1", agent_type="Explore", last_assistant_message="Done.")).json)
 
     def test_hooks_json_registers_both(self):
