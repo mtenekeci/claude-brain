@@ -145,7 +145,11 @@ def _init(args):
     vault_root = config.vault_root()
     if not vault_root and args.vault:
         newv = os.path.realpath(os.path.expanduser(args.vault)); os.makedirs(newv, exist_ok=True)
-        config.set_value("vault", newv); vault_root = newv
+        try:
+            config.set_value("vault", newv)
+        except ValueError as e:
+            print(str(e)); return 1
+        vault_root = newv
     if not vault_root:
         print("brain: not configured — run: brain config set vault <path>"); return 2
     name = args.name.strip(); slug = initproj.slugify_name(name)

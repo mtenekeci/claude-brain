@@ -70,6 +70,14 @@ class ProjectCliTests(unittest.TestCase):
         rc, out = self._run("config", "set", "graph.backend", "graphify"); self.assertEqual(config.load_config()["graph"]["backend"], "graphify")
         rc, out = self._run("config", "set", "vault", "/nonexistent/dir"); self.assertEqual(rc, 1)
 
+    def test_config_set_refuses_to_touch_a_malformed_config(self):
+        cfg_path = os.environ["BRAIN_CONFIG"]
+        vault.write(cfg_path, "{not valid json")
+        rc, out = self._run("config", "set", "gate", "off")
+        self.assertEqual(rc, 1)
+        self.assertIn("not valid JSON", out)
+        self.assertEqual(vault.read(cfg_path), "{not valid json")
+
     def test_remove_requires_confirm_then_cleans(self):
         rc, out = self._run("remove", "demo"); self.assertEqual(rc, 1); self.assertIn("Type 'demo' to confirm", out)
         rc, out = self._run("remove", "demo", "--confirm", "demo"); self.assertEqual(rc, 0)

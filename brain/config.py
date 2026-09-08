@@ -7,13 +7,38 @@ def _config_path():
     return os.environ.get("BRAIN_CONFIG") or os.path.expanduser("~/.claude/brain.config")
 
 def load_config():
-    """Return the parsed brain.config dict, or {} if missing/invalid."""
+    """Return the parsed brain.config dict, or {} if missing/invalid. Read-only paths (hooks,
+    `brain config` display, `vault_root()`) go through this — a malformed file must never raise
+    here, or a hand-edited typo would silence every hook."""
     try:
         with open(_config_path(), encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+
+_MALFORMED_CONFIG_ERROR = "brain: ~/.claude/brain.config is not valid JSON — fix or remove it before changing settings"
+
+def _load_config_strict():
+    """Like `load_config()`, but a mutating path (`set_value`, `init --vault`) needs to tell
+    'missing' ({}) apart from 'malformed' — `load_config()` collapses both to {}, and rewriting
+    a malformed-but-present file from that empty dict would silently discard every field a user
+    hand-edited it to have. Raises ValueError on a present file that is not a JSON object; the
+    file itself is never touched here."""
+    try:
+        with open(_config_path(), encoding="utf-8") as f:
+            raw = f.read()
+    except OSError:
+        return {}
+    if not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise ValueError(_MALFORMED_CONFIG_ERROR)
+    if not isinstance(data, dict):
+        raise ValueError(_MALFORMED_CONFIG_ERROR)
+    return data
 
 def vault_root():
     v = load_config().get("vault")
@@ -34,7 +59,7 @@ def set_value(key, value):
     """`brain config set` mechanics. `key` is one of vault|gate|async_regen|graph.backend.
     Raises ValueError on an invalid key or value; callers (the CLI) turn that into exit 1.
     Returns the full config dict after the write."""
-    data = load_config()
+    data = _load_config_strict()
     if key == "vault":
         v = os.path.realpath(os.path.expanduser(value))
         if not os.path.isdir(v):
