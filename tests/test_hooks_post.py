@@ -116,3 +116,52 @@ class PostToolUseTests(unittest.TestCase):
             hooks.subprocess.Popen = orig_popen
         self.assertEqual(len(calls), 1)
         s = state.SessionState.load("s1"); self.assertGreater(s.last_regen_spawn_at, 0)
+
+
+class PostToolUseDeliveryTests(unittest.TestCase):
+    """PostToolUse stdout is transcript-only in Claude Code — every reminder must ride
+    hookSpecificOutput.additionalContext instead (SMOKE.md check 10)."""
+
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = make_vault(self.tmp.name, slug="demo"); write_config(self.tmp.name, self.vault)
+        self.repo = make_project(self.tmp.name, slug="demo")
+
+    def tearDown(self):
+        self.tmp.cleanup(); os.environ.clear(); os.environ.update(self._env)
+
+    def _commit(self, msg):
+        import subprocess
+        with open(os.path.join(self.repo, "a.py"), "a") as f: f.write("# x\n")
+        subprocess.run(["git", "-C", self.repo, "commit", "-qam", msg], check=True)
+
+    def test_reminders_are_delivered_as_additional_context(self):
+        self._commit("feat: x")
+        r = hooks.dispatch("PostToolUse", payload("PostToolUse", self.repo, tool_name="Bash",
+                                                  tool_input={"command": "git commit -m x"}))
+        self.assertIn("commit landed", r.stdout)              # handlers still compose plain text
+        self.assertEqual(r.json["hookSpecificOutput"]["hookEventName"], "PostToolUse")
+        self.assertEqual(r.json["hookSpecificOutput"]["additionalContext"], r.stdout)
+
+    def test_a_silent_result_stays_silent(self):
+        r = hooks.dispatch("PostToolUse", payload("PostToolUse", self.repo, tool_name="Read",
+                                                  tool_input={"file_path": os.path.join(self.repo, "notes.txt")}))
+        self.assertEqual((r.stdout, r.json), ("", None))
+
+    def test_only_post_tool_use_is_rewrapped(self):
+        """SessionStart and UserPromptSubmit do inject stdout; they must keep using it."""
+        r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        self.assertIn("Brain: vault context", r.stdout); self.assertIsNone(r.json)
+
+    def test_entry_point_emits_the_json_once(self):
+        import json as _json, subprocess, sys
+        self._commit("feat: y")
+        main_py = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(hooks.__file__))),
+                               "brain", "__main__.py")
+        body = _json.dumps(payload("PostToolUse", self.repo, tool_name="Bash",
+                                   tool_input={"command": "git commit -m y"}))
+        r = subprocess.run([sys.executable, main_py, "hook", "PostToolUse"], input=body, text=True,
+                           capture_output=True, env=dict(os.environ))
+        out = _json.loads(r.stdout)                            # exactly one JSON document, no stray text
+        self.assertIn("commit landed", out["hookSpecificOutput"]["additionalContext"])

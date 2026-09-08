@@ -81,7 +81,7 @@ def dispatch(event, payload):
         with state.locked(ctx.session_id, timeout=timeout) as s:
             ctx.attach_state(s)
             result = handler(ctx)
-        result = result or EMPTY
+        result = _deliverable(event, result or EMPTY)
         if result.after_lock is not None:
             try:
                 result.after_lock()
@@ -91,6 +91,25 @@ def dispatch(event, payload):
     except Exception:
         config.log_error("%s failed: %s" % (event, traceback.format_exc().strip().splitlines()[-1]))
         return EMPTY
+
+# Events whose plain stdout is transcript-only — the model never sees it. Measured in
+# SMOKE.md check 10 against Claude Code 2.1.263: a PostToolUse reminder written to stdout
+# does not reach the turn (the same miss that cost us SubagentStop), while the identical text
+# in hookSpecificOutput.additionalContext does. SessionStart and UserPromptSubmit DO inject
+# stdout and are deliberately not listed; nothing is added here that has not been measured.
+_ADDITIONAL_CONTEXT_EVENTS = ("PostToolUse",)
+
+
+def _deliverable(event, result):
+    """Re-address a stdout-only result onto the channel its event actually delivers.
+
+    `stdout` is kept alongside the JSON: __main__ prefers `json`, so nothing is emitted twice,
+    and handlers plus their tests keep reading the text off one field."""
+    if event not in _ADDITIONAL_CONTEXT_EVENTS or result.json is not None or not result.stdout:
+        return result
+    return HookResult(stdout=result.stdout, exit_code=result.exit_code, after_lock=result.after_lock,
+                      json={"hookSpecificOutput": {"hookEventName": event, "additionalContext": result.stdout}})
+
 
 def _protocol(ctx):
     text = vault.read(PROTOCOL_PATH)
