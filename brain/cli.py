@@ -31,12 +31,16 @@ def _graph(args):
         sys.stdout.write(graph.render_near(g, nid, depth=args.depth, limit=args.limit) if nid else "no matches\n"); return 0
     if args.cmd == "ask":
         from brain import backends
+        # Two different failures, two different messages: "the backend is off" is a config
+        # answer, "the query came back empty" is a question-shape answer.
+        msg = "graph: graphify backend not active (config graph.backend, or run /graphify first)"
         if backends.select(proj.project_dir) == backends.GRAPHIFY:
             from brain.backends import graphify
             out = graphify.ask(proj.project_dir, args.question, budget=args.budget)
             if out.strip():
                 sys.stdout.write(out if out.endswith("\n") else out + "\n"); return 0
-        print("graph: graphify backend not active (config graph.backend, or run /graphify first)")
+            msg = "graph: graphify query returned nothing (timeout or error) — try a narrower question"
+        print(msg)
         hit = (graph.find(g, args.question, limit=1) or [None])[0]
         sys.stdout.write(graph.render_near(g, hit.id) if hit else "no matches\n"); return 0
     if args.cmd == "path":

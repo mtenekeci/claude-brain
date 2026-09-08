@@ -334,10 +334,9 @@ def load(vault_root, slug, project_dir=None, force=False):
     pdir = os.path.join(vault_root, "projects", slug)
     cache = os.path.join(pdir, ".brain", "graph.json")
     stamp = inputs_mtime(vault_root, slug, project_dir)
-    # Resolved once: the cache check needs the backend name and the layer's own sha, and the
-    # build needs the layer itself.
-    layer, backend = backends.code_layer(project_dir, pdir)
-    source = (layer or {}).get("sha", "")
+    # Cheap: names the selected backend and hashes its input file without parsing it, so a
+    # cache hit never pays for reading the code layer.
+    backend, source = backends.source_key(project_dir, pdir)
     if not force:
         try:
             with open(cache, encoding="utf-8") as f:
@@ -350,10 +349,15 @@ def load(vault_root, slug, project_dir=None, force=False):
                 return Graph.from_dict(d["graph"])
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
-    g = build(vault_root, slug, project_dir, layer=layer, backend=backend)
+    layer, effective = backends.code_layer(project_dir, pdir)
+    g = build(vault_root, slug, project_dir, layer=layer, backend=effective)
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         tmp = cache + ".tmp"
+        # The cache keys off what was *selected*, not what the selection produced: a graph that
+        # fails to parse falls back to builtin deterministically, and storing "builtin" here
+        # would make every later load see a mismatch and rebuild. The graph's own project node
+        # carries the backend actually used.
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"built_at": stamp, "backend": backend, "source": source, "graph": g.to_dict()}, f)
         os.replace(tmp, cache)

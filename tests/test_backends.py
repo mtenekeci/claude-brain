@@ -1,4 +1,4 @@
-import io, json, os, stat, tempfile, unittest
+import io, json, os, shutil, stat, tempfile, unittest
 from contextlib import redirect_stdout
 from tests.helpers import make_graph_vault, make_project, make_source_tree, write_config
 from brain import backends, cli, codemap, config, graph
@@ -25,6 +25,10 @@ def graphify_fixture(repo):
         # never produce it. Every "did the backend really supply the layer?" assertion
         # keys off this node.
         {"id": "src_graphonly", "label": "graphonly.ts", "type": "file", "source_file": "./src/graphonly.ts"},
+        # A doc corpus node and one of its headings: real graphify graphs mix these in, and a
+        # code layer must not grow a README "file" with a "Overview" symbol.
+        {"id": "readme", "label": "README.md", "file_type": "document", "source_file": "README.md"},
+        {"id": "readme_overview", "label": "Overview", "file_type": "document", "source_file": "README.md"},
     ]
     links = [
         {"source": "src_auth_session", "target": "src_db", "relation": "imports", "confidence_score": 1.0},
@@ -41,13 +45,14 @@ def graphify_fixture(repo):
 
 
 def stub_graphify(tmp, body=None):
-    """A `graphify` executable first on PATH. Echoes its argv, then 80 lines (the ask cap
-    has to bite on something)."""
+    """A `graphify` executable first on PATH. Echoes its argv joined, then one line per
+    argument (so a question with spaces is visibly ONE argument), then 80 lines — the ask
+    output cap has to bite on something."""
     bindir = os.path.join(tmp, "bin")
     os.makedirs(bindir, exist_ok=True)
     path = os.path.join(bindir, "graphify")
     with open(path, "w", encoding="utf-8") as f:
-        f.write(body or '#!/bin/sh\necho "GRAPHIFY:$*"\ni=0\nwhile [ $i -lt 80 ]; do echo "line$i"; i=$((i+1)); done\n')
+        f.write(body or '#!/bin/sh\necho "GRAPHIFY:$*"\nfor a in "$@"; do echo "ARG:$a"; done\ni=0\nwhile [ $i -lt 80 ]; do echo "line$i"; i=$((i+1)); done\n')
     os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     os.environ["PATH"] = bindir + os.pathsep + os.environ.get("PATH", "")
     return bindir
@@ -98,6 +103,17 @@ class SelectionTests(BackendFixture):
         self.assertFalse(graphify.available(self.repo))
         self.assertFalse(graphify.available(None))
 
+    def test_explicit_graphify_without_a_graph_is_a_silent_builtin(self):
+        """graph.backend is global, graphify graphs are per project: the projects that have no
+        graph are the normal case and must not write a line per load into brain.log."""
+        shutil.rmtree(os.path.join(self.repo, "graphify-out"))
+        write_config(self.tmp.name, self.vault, extra={"graph": {"backend": "graphify"}})
+        self.assertEqual(backends.select(self.repo), "builtin")
+        for _ in range(5):
+            g = graph.load(self.vault, "demo", self.repo)
+        self.assertEqual(g.nodes["project:demo"].meta["backend"], "builtin")
+        self.assertEqual(self.log_text(), "")
+
     def test_select_honours_config_and_availability(self):
         self.assertEqual(backends.select(self.repo), "graphify")            # auto + available
         write_config(self.tmp.name, self.vault, extra={"graph": {"backend": "builtin"}})
@@ -120,6 +136,8 @@ class GraphifyLayerTests(BackendFixture):
         self.assertEqual(sorted(byp["src/auth/session.ts"]["symbols"]), ["Foundation", "SessionStore", "refresh"])
         self.assertEqual(byp["src/db.ts"]["symbols"], ["Conn"])
         self.assertEqual(byp["lib/util.py"]["symbols"], ["run"])            # absolute source_file relativised
+        self.assertNotIn("README.md", byp)                                  # file_type document → not code
+        self.assertNotIn("Overview", [s for f in layer["files"] for s in f["symbols"]])
         # imports: the `imports` edge plus the symbol→symbol `calls` edge lifted to its files.
         self.assertEqual(byp["src/auth/session.ts"]["imports"], ["src/auth/verify.ts", "src/db.ts"])
         self.assertEqual(byp["src/db.ts"]["imports"], [])                   # `contains` is not an import
@@ -163,20 +181,21 @@ class GraphifyLayerTests(BackendFixture):
     def test_ask_runs_the_cli_and_caps_output(self):
         out = graphify.ask(self.repo, "how does auth work")
         self.assertTrue(out.startswith("GRAPHIFY:query how does auth work --budget 1500"))
+        self.assertIn("ARG:how does auth work", out.splitlines())           # one argument, not four
         self.assertLessEqual(len(out.splitlines()), 60)
         self.assertEqual(graphify.ask(self.repo, "  "), "")
         os.environ["PATH"] = ""
         self.assertEqual(graphify.ask(self.repo, "anything"), "")
 
     def test_ask_never_triggers_a_build(self):
-        # The only argv graphify is ever handed is a read-only query.
-        seen = []
+        # The only argv graphify is ever handed is a read-only query — one line per argument,
+        # so a multi-word question proves it is passed as a single argv entry.
+        argv = os.path.join(self.tmp.name, "argv.txt")
         with open(os.path.join(self.tmp.name, "bin", "graphify"), "w", encoding="utf-8") as f:
-            f.write('#!/bin/sh\necho "$@" >> %s\n' % os.path.join(self.tmp.name, "argv.txt"))
-        graphify.ask(self.repo, "q", budget=42)
-        with open(os.path.join(self.tmp.name, "argv.txt"), encoding="utf-8") as f:
-            seen = f.read().split()
-        self.assertEqual(seen, ["query", "q", "--budget", "42"])
+            f.write('#!/bin/sh\nfor a in "$@"; do echo "$a" >> %s; done\n' % argv)
+        graphify.ask(self.repo, "how does auth work", budget=42)
+        with open(argv, encoding="utf-8") as f:
+            self.assertEqual(f.read().splitlines(), ["query", "how does auth work", "--budget", "42"])
 
 
 class GraphIntegrationTests(BackendFixture):
@@ -206,6 +225,22 @@ class GraphIntegrationTests(BackendFixture):
         g = graph.load(self.vault, "demo", self.repo)
         self.assertIn("file:src/graphonly.ts", g.nodes)
         self.assertEqual(g.nodes["project:demo"].meta["backend"], "graphify")
+
+    def test_cache_hit_never_parses_the_graph(self):
+        """The cache check compares a streamed md5, so a cache hit must not touch the parser —
+        parsing a 6k-node graph.json on every hook load is exactly what the cache is for."""
+        graph.load(self.vault, "demo", self.repo)
+        orig = graphify.parse_graph
+
+        def boom(*a, **k):
+            raise AssertionError("parse_graph called on a cache hit")
+
+        graphify.parse_graph = boom
+        try:
+            g = graph.load(self.vault, "demo", self.repo)
+        finally:
+            graphify.parse_graph = orig
+        self.assertIn("file:src/graphonly.ts", g.nodes)
 
     def test_regenerated_graph_json_invalidates_the_cache(self):
         graph.load(self.vault, "demo", self.repo)
@@ -247,6 +282,15 @@ class AskCliTests(BackendFixture):
         self.assertIn("GRAPHIFY:query how does auth work --budget 1500", out)
         rc, out = self._run("graph", "ask", "x", "--budget", "300")
         self.assertIn("--budget 300", out)
+
+    def test_ask_reports_an_empty_query_differently_from_an_inactive_backend(self):
+        with open(os.path.join(self.tmp.name, "bin", "graphify"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        rc, out = self._run("graph", "ask", "session")
+        self.assertEqual(rc, 0)
+        self.assertIn("graphify query returned nothing", out)
+        self.assertNotIn("backend not active", out)
+        self.assertIn("file src/auth/session.ts", out)                      # still falls back
 
     def test_ask_without_the_backend_explains_and_falls_back(self):
         write_config(self.tmp.name, self.vault, extra={"graph": {"backend": "builtin"}})

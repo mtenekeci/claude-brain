@@ -9,9 +9,9 @@ The on-disk shape drifts between graphify versions, so every field is read toler
 edges live under `edges` or `links`, endpoints under `source`/`target` or `from`/`to`, and
 most real nodes carry no `type` at all — only `label` + `source_file`.
 """
-import hashlib, json, os, shutil, subprocess, time
+import json, os, shutil, subprocess, time
 
-from brain import codemap, config
+from brain import backends, codemap, config
 
 OUT_DIR = "graphify-out"
 MAX_SYMBOLS = codemap.MAX_SYMBOLS
@@ -23,7 +23,22 @@ DEFAULT_BUDGET = 1500
 FILE_TYPES = ("file",)
 SYMBOL_TYPES = ("function", "class", "method", "symbol", "interface", "struct", "trait", "enum", "const", "variable")
 # `contains`, `references`, `cites`… say nothing about the file graph; these two do.
-IMPORT_RELATIONS = ("imports", "import", "calls", "call", "invokes", "depends_on", "depends-on")
+IMPORT_RELATIONS = ("imports", "import", "imports_from", "imports-from", "re_exports", "re-exports",
+                    "calls", "call", "invokes", "depends_on", "depends-on")
+# graphify tags every node with the corpus it came from; only `code` belongs in a code layer.
+# Nodes predating the field (no `file_type` at all) fall back to the basename heuristic.
+CODE_FILE_TYPE = "code"
+
+# Paths already reported this process. A broken graph.json is broken on every load, and
+# `graph.load` runs on the hook hot path — one line per problem, not one per load.
+_LOGGED = set()
+
+
+def _log_once(path, msg):
+    if path in _LOGGED:
+        return
+    _LOGGED.add(path)
+    config.log_error(msg)
 
 
 def out_dir(project_dir):
@@ -32,6 +47,12 @@ def out_dir(project_dir):
 
 def graph_json(project_dir):
     return os.path.join(out_dir(project_dir), "graph.json")
+
+
+def source_key(project_dir):
+    """Content key for the graph, computed without parsing it. Matches the `sha` that
+    `code_layer` puts on the layer it returns — both are md5 over the same bytes."""
+    return backends.digest(graph_json(project_dir), "graphify:")
 
 
 def interpreter(project_dir):
@@ -145,6 +166,9 @@ def parse_graph(project_dir, data):
     for n in _nodes(data):
         if not isinstance(n, dict):
             continue
+        ftype = _text(n, "file_type").lower()
+        if ftype and ftype != CODE_FILE_TYPE:
+            continue                                # a doc/paper/image node is not a source file
         path = _rel(project_dir, _text(n, "path", "file", "source_file", "source", "filename"))
         if not path:
             continue
@@ -188,19 +212,23 @@ def code_layer(project_dir):
         if not isinstance(data, dict):
             raise ValueError("graph.json is not an object")
         files = parse_graph(project_dir, data)
+        if not files:
+            # A graph with no source files (docs-only corpus, or a shape we did not
+            # recognise) would silently erase the code layer — hand the builtin one back.
+            raise ValueError("no file nodes")
+        # Inside the try as well: manifest parsing and the digest touch the disk too, and a
+        # failure there is the same "backend unusable" outcome, not a traceback.
+        layer = {"sha": source_key(project_dir),
+                 "files": sorted(files.values(), key=lambda f: f["path"]),
+                 "deps": codemap.manifest_deps(project_dir),
+                 "generated_at": int(time.time()),
+                 "backend": "graphify"}
+    except FileNotFoundError:
+        return None                                 # no graph here: normal, and never logged
     except (OSError, ValueError, TypeError, AttributeError, IndexError) as e:
-        config.log_error("graphify: cannot use %s (%s)" % (path, e))
+        _log_once(path, "graphify: cannot use %s (%s) — using the builtin code layer" % (path, e))
         return None
-    if not files:
-        # A graph with no source files (docs-only corpus, or a shape we did not recognise)
-        # would silently erase the code layer. Better to hand the builtin one back.
-        config.log_error("graphify: %s yielded no file nodes — using the builtin code layer" % path)
-        return None
-    return {"sha": "graphify:" + hashlib.md5(raw).hexdigest()[:8],
-            "files": sorted(files.values(), key=lambda f: f["path"]),
-            "deps": codemap.manifest_deps(project_dir),
-            "generated_at": int(time.time()),
-            "backend": "graphify"}
+    return layer
 
 
 # ---------------------------------------------------------------- ask
