@@ -69,10 +69,6 @@ def set_frontmatter(text, key, value):
 CONTEXT_LINE_CAP = 150
 INJECT_BYTE_CAP = 16 * 1024
 
-def size_kb(text):
-    """Whole KB of UTF-8 `text` — the unit both the truncation marker and `/brain status` use."""
-    return len((text or "").encode("utf-8")) // 1024
-
 def for_injection(text, cap=INJECT_BYTE_CAP):
     """(text_to_inject, over_kb). `over_kb` is 0 when the note fits and its whole size in KB
     when it does not, so the caller can both mark the cut and name the file to trim.
@@ -215,7 +211,7 @@ def atomic_write(path, text):
         try:
             f = os.fdopen(fd, "w", encoding="utf-8")        # from here the file object owns fd
         except BaseException:
-            os.close(fd)                                    # …but only if fdopen itself succeeded
+            os.close(fd)                                    # fdopen failed, so nothing else owns fd
             raise
         with f:
             f.write(text)
