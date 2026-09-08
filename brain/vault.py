@@ -165,6 +165,12 @@ def atomic_write(path, text):
     unlink the other's in-flight file or publish a half-written one. The name is removed only
     on the failure path; a successful replace has already consumed it.
 
+    This is the ONLY temp-file dance in the package: config, session state, the graph cache,
+    the dismissed-candidate list, the code layer and every vault note all land through here, so
+    the naming and cleanup rules live in exactly one place. Callers that write JSON serialise it
+    themselves and hand over text — that keeps each site's own `json.dumps` options (indent,
+    ensure_ascii, trailing newline) instead of pushing them all through one signature.
+
     What "atomic" does NOT buy you: `os.replace` puts a *fresh regular file* at `path`, so
     ownership, extended attributes and hard links to the old inode are not carried over, and a
     symlink at `path` is replaced rather than written through. Permission bits ARE carried over

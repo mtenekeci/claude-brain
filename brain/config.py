@@ -1,6 +1,8 @@
 """Config + plugin data dir. Single source for paths every other module needs."""
 import json, os, time
 
+from brain import vault      # stdlib-only module: importing it here cannot cycle
+
 def _config_path():
     return os.environ.get("BRAIN_CONFIG") or os.path.expanduser("~/.claude/brain.config")
 
@@ -19,14 +21,9 @@ def vault_root():
     return os.path.realpath(os.path.expanduser(v)) if isinstance(v, str) and v else None
 
 def save_config(data):
-    """Atomic tmp+replace write of the full config dict to the config path."""
-    path = _config_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    os.replace(tmp, path)
+    """Atomic write of the full config dict to the config path. The trailing newline is kept:
+    brain.config is a file people open and edit by hand."""
+    vault.atomic_write(_config_path(), json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 _GATE_VALUES = ("all", "commits", "off")
 _ON_VALUES = ("on", "true", "1", "yes")

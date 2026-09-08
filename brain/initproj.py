@@ -244,8 +244,5 @@ def grant_permissions(vault_root, settings_path_override=None):
         if raw and not os.path.exists(bak):
             with open(bak, "w", encoding="utf-8") as f:
                 f.write(raw)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False); f.write("\n")
-        os.replace(tmp, path)
+        vault.atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     return added

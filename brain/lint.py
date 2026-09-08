@@ -28,11 +28,10 @@ def load_dismissed(pdir):
 def dismiss(pdir, slug):
     d = load_dismissed(pdir)
     d.add(slug)
-    path = os.path.join(_brain_dir(pdir), "dismissed.json")
-    tmp = path + ".tmp"                             # atomic: a torn write here silently un-dismisses
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"candidates": sorted(d)}, f, indent=1)
-    os.replace(tmp, path)
+    # atomic: a torn write here silently un-dismisses, and two sessions in one project can
+    # dismiss at the same moment — vault.atomic_write owns both problems.
+    vault.atomic_write(os.path.join(_brain_dir(pdir), "dismissed.json"),
+                       json.dumps({"candidates": sorted(d)}, indent=1))
 
 def _concepts(g):
     """Concept nodes, sorted by id — Node has no ordering, and matching must be deterministic."""

@@ -168,3 +168,73 @@ class AtomicWriteTests(unittest.TestCase):
             os.replace = real
         self.assertEqual(vault.read(self.path), "keep\n")
         self.assertEqual(self._strays(), [])
+
+
+class SingleTempDisciplineTests(unittest.TestCase):
+    """Every durable write in the package goes through `vault.atomic_write`.
+
+    The point is not style: a second temp-file dance is a second set of naming and cleanup
+    rules to get wrong, and `path + ".tmp"` specifically is the one that two processes can
+    collide on. These tests fail if a module grows its own again.
+    """
+
+    BRAIN = os.path.dirname(os.path.dirname(os.path.abspath(vault.__file__)))
+
+    def _sources(self):
+        d = os.path.join(self.BRAIN, "brain")
+        for root, dirs, files in os.walk(d):
+            for name in sorted(files):
+                if name.endswith(".py"):
+                    path = os.path.join(root, name)
+                    with open(path, encoding="utf-8") as f:
+                        yield os.path.relpath(path, d), f.read()
+
+    def test_no_module_rolls_its_own_temp_file(self):
+        for rel, text in self._sources():
+            if rel == "vault.py":
+                continue                     # the one place that is allowed to know about temps
+            code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+            self.assertNotIn('+ ".tmp"', code, "%s builds its own temp name" % rel)
+            self.assertNotIn("mkstemp", code, "%s opens its own temp file" % rel)
+
+    def test_writers_delegate_to_atomic_write(self):
+        """Spy on the helper and drive each writer that used to have its own temp dance."""
+        import json
+        from brain import config, initproj, lint, state
+        seen = []
+        real = vault.atomic_write
+        vault.atomic_write = lambda path, text: (seen.append(path), real(path, text))[1]
+        env = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(env)))
+        self.addCleanup(lambda: setattr(vault, "atomic_write", real))
+        with tempfile.TemporaryDirectory() as t:
+            os.environ["BRAIN_CONFIG"] = os.path.join(t, "brain.config")
+            os.environ["CLAUDE_PLUGIN_DATA"] = os.path.join(t, "data")
+            os.environ["BRAIN_USER_SETTINGS"] = os.path.join(t, "user-settings.json")
+            config.save_config({"vault": t})
+            state.SessionState("sess").save()
+            lint.dismiss(os.path.join(t, "proj"), "redis")
+            initproj.grant_permissions(t)
+            names = [os.path.basename(p) for p in seen]
+            self.assertEqual(sorted(names),
+                             ["brain.config", "dismissed.json", "sess.json", "user-settings.json"])
+            # ...and every one of them is readable JSON with no temp file left beside it.
+            for p in seen:
+                with open(p, encoding="utf-8") as f:
+                    json.load(f)
+                strays = [f for f in os.listdir(os.path.dirname(p)) if f.endswith(".tmp")]
+                self.assertEqual(strays, [], p)
+        # graph.load's cache write is covered structurally above and behaviourally by
+        # tests/test_graph.py's cache round-trip, which needs a full vault fixture.
+
+    def test_config_keeps_its_trailing_newline(self):
+        """brain.config is hand-edited; `json.dumps` alone would drop the final newline."""
+        env = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(env)))
+        from brain import config
+        with tempfile.TemporaryDirectory() as t:
+            path = os.path.join(t, "brain.config")
+            os.environ["BRAIN_CONFIG"] = path
+            config.save_config({"vault": t, "gate": "all"})
+            self.assertTrue(vault.read(path).endswith("}\n"))
+            self.assertEqual(config.load_config()["gate"], "all")

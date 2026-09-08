@@ -367,17 +367,14 @@ def load(vault_root, slug, project_dir=None, force=False):
     layer, effective = backends.code_layer(project_dir, pdir)
     g = build(vault_root, slug, project_dir, layer=layer, backend=effective)
     try:
-        os.makedirs(os.path.dirname(cache), exist_ok=True)
-        tmp = cache + ".tmp"
         # The cache keys off what was *selected*, not what the selection produced: a graph that
         # fails to parse falls back to builtin deterministically, and storing "builtin" here
         # would make every later load see a mismatch and rebuild. The graph's own project node
         # carries the backend actually used.
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"built_at": stamp, "backend": backend, "source": source, "graph": g.to_dict()}, f)
-        os.replace(tmp, cache)
+        vt.atomic_write(cache, json.dumps(
+            {"built_at": stamp, "backend": backend, "source": source, "graph": g.to_dict()}))
     except OSError:
-        pass
+        pass                        # a cache that cannot be written is not fatal
     return g
 
 # ---------------------------------------------------------------- queries

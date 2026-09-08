@@ -1,6 +1,6 @@
 """Per-session counters used by hooks. One JSON file per Claude session_id under the plugin data dir."""
 import contextlib, fcntl, json, os, time
-from brain import config
+from brain import config, vault
 
 _DEFAULTS = dict(
     slug="", vault="", project_dir="", started_at=0.0,
@@ -51,11 +51,10 @@ class SessionState(object):
         return s
 
     def save(self):
+        # Runs inside locked(): vault.atomic_write is a handful of syscalls, the same order as
+        # the open+dump+replace it replaces, so the critical section is unchanged.
         data = {k: getattr(self, k) for k in _DEFAULTS}
-        tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, self.path)
+        vault.atomic_write(self.path, json.dumps(data))
 
     def delete(self):
         """Remove only the JSON state file. Never unlink the .lock file: locked()
