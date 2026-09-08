@@ -2,8 +2,10 @@
 project: {slug}
 type: {type}
 path: {path}
-repo: —
+repo: {repo}
+branch: 
 updated: {date}
+codemap: true
 up: "[[_system/project-index]]"
 ---
 

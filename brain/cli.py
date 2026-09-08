@@ -68,6 +68,42 @@ def _map(args):
     return 0
 
 
+def _init(args):
+    from brain import initproj, gitinfo
+    vault_root = config.vault_root()
+    if not vault_root and args.vault:
+        newv = os.path.realpath(os.path.expanduser(args.vault)); os.makedirs(newv, exist_ok=True)
+        config.set_value("vault", newv); vault_root = newv
+    if not vault_root:
+        print("brain: not configured — run: brain config set vault <path>"); return 2
+    name = args.name.strip(); slug = initproj.slugify_name(name)
+    if not slug:
+        print("brain: could not derive a slug from %r" % name); return 1
+    pdir_repo = os.path.realpath(args.project_dir or os.getcwd())
+    err = initproj.preflight(vault_root, slug, args.type, pdir_repo if args.type == "code" else None, want_permissions=not args.no_permissions)
+    if err:
+        print(err); return 1
+    initproj.ensure_vault(vault_root)
+    repo_url = gitinfo._git(pdir_repo, "remote", "get-url", "origin").strip() if args.type == "code" else ""
+    written = initproj.create_project(vault_root, slug, name, args.type, pdir_repo if args.type == "code" else None, repo_url)
+    # Grant permissions against the vault path as configured (not the realpath'd canonical form
+    # used for internal filesystem/comparison work) — that's what the user actually sees/expects
+    # in their settings.json, and it's what a fresh `--vault` install just saved verbatim.
+    raw_vault = config.load_config().get("vault") or vault_root
+    granted = 0 if args.no_permissions else initproj.grant_permissions(raw_vault)
+    print("Brain initialized for %s (%s)\n\nVault:          %s\nContext:        %s\nLog:            %s" % (
+        name, slug, vault_root, os.path.join(vault_root, "projects", slug, "context.md"), os.path.join(vault_root, "projects", slug, "log.md")))
+    if args.type == "code":
+        print("CLAUDE.md:      %s\nCodemap:        %s\nHooks:          shipped by the plugin (no per-project registration)" % (
+            written.get("claude_md", "(already had a brain line)"), written.get("codemap", "")))
+    print("Permissions:    %s" % ("%d entries added to user settings" % granted if granted else "already present"))
+    if args.type == "topic":
+        print("To load this project in any session: /brain load %s" % slug)
+    if args.packet and args.type == "code":
+        print("\n=== SEEDING PACKET ===\n" + initproj.seeding_packet(pdir_repo))
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="brain", add_help=True)
     sub = p.add_subparsers(dest="top")
@@ -79,6 +115,13 @@ def build_parser():
     gs.add_parser("rebuild")
     l = gs.add_parser("lint"); l.add_argument("--all-projects", action="store_true")
     m = sub.add_parser("map"); m.add_argument("--regen", action="store_true"); m.add_argument("--force", action="store_true"); m.add_argument("--quiet", action="store_true")
+    i = sub.add_parser("init")
+    i.add_argument("--name", required=True)
+    i.add_argument("--type", choices=["code", "topic"], required=True)
+    i.add_argument("--project-dir")
+    i.add_argument("--vault")
+    i.add_argument("--no-permissions", action="store_true")
+    i.add_argument("--packet", action="store_true")
     return p
 
 
@@ -92,4 +135,6 @@ def run(argv):
         return _graph(args)
     if args.top == "map":
         return _map(args)
+    if args.top == "init":
+        return _init(args)
     parser.print_usage(); return 1
