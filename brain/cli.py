@@ -86,6 +86,12 @@ def _graph(args):
         except ImportError:
             print("lint: not available"); return 0
         sys.stdout.write(lint.render(lint.run(vault, proj.slug, proj.project_dir, g, all_projects=args.all_projects))); return 0
+    if args.cmd == "dismiss":
+        from brain import lint
+        pdir = project.vault_project_dir(vault, proj.slug)
+        lint.dismiss(pdir, args.slug)
+        print("dismissed: %s" % args.slug)
+        return 0
     return 1
 
 
@@ -537,6 +543,52 @@ def _cmd_disconnect(args):
     return 0
 
 
+def _cmd_repair(args):
+    from brain import codemap, migrate
+    vault_root = resolve_vault()
+    if vault_root is None:
+        return 2
+    slug = args.slug
+    pdir = project.vault_project_dir(vault_root, slug)
+    ctx_path = os.path.join(pdir, "context.md")
+    if not os.path.exists(ctx_path):
+        print("Project '%s' not found in vault." % slug); return 1
+    cwd = os.path.realpath(os.getcwd())
+    # resolve_project walks up from cwd — a same-slug hit may live in a parent dir. Never
+    # write a nested CLAUDE.md next to it; repair the one that's actually connected.
+    existing_proj = project.resolve_project(cwd)
+    if existing_proj is not None and existing_proj.slug != slug:
+        print("%s is connected to '%s', not '%s' — refusing to overwrite" % (
+            existing_proj.claude_md, existing_proj.slug, slug))
+        return 1
+    target_dir = existing_proj.project_dir if existing_proj is not None else cwd
+    claude_md = os.path.join(target_dir, "CLAUDE.md")
+    text = vault.read(claude_md)
+    fm_prefix = text[:project.body_start(text)]
+    body = text[len(fm_prefix):]
+    if existing_proj is not None:
+        # Already has a valid brain block for this slug: preserve frontmatter, replace only
+        # the brain block, keep the rest.
+        head, rest = project.split_brain_block(body)
+    else:
+        # Absent, or present with no recognizable brain line: v1 rule is block + existing verbatim.
+        head, rest = "", body
+    name = migrate._display_name(head, slug)
+    if os.path.exists(claude_md):
+        vault.write(migrate._backup_path(claude_md), text)
+    vault.write(claude_md, fm_prefix + migrate.slim_block(name, slug) + rest)
+    fm, _ = vault.parse_frontmatter(vault.read(ctx_path))
+    ctx_path_field = fm.get("path", "")
+    if ctx_path_field and ctx_path_field != "—" and os.path.realpath(os.path.expanduser(ctx_path_field)) != target_dir:
+        print("warning: context.md path: %s differs from %s — update it with /brain sync if this folder moved" % (
+            ctx_path_field, target_dir))
+    codemap.ensure(target_dir, pdir)
+    print("Repaired: %s" % slug)
+    print("CLAUDE.md:      %s" % claude_md)
+    print("Codemap:        %s" % os.path.join(pdir, "codemap.md"))
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="brain", add_help=True)
     sub = p.add_subparsers(dest="top")
@@ -548,6 +600,7 @@ def build_parser():
     ak = gs.add_parser("ask"); ak.add_argument("question"); ak.add_argument("--budget", type=int, default=1500)
     gs.add_parser("rebuild")
     l = gs.add_parser("lint"); l.add_argument("--all-projects", action="store_true")
+    ds = gs.add_parser("dismiss"); ds.add_argument("slug")
     m = sub.add_parser("map"); m.add_argument("--regen", action="store_true"); m.add_argument("--force", action="store_true"); m.add_argument("--quiet", action="store_true"); m.add_argument("--annotate", action="store_true")
     i = sub.add_parser("init")
     i.add_argument("--name", required=True)
@@ -564,6 +617,7 @@ def build_parser():
     cs = csub.add_parser("set"); cs.add_argument("key"); cs.add_argument("value")
     rm = sub.add_parser("remove"); rm.add_argument("slug"); rm.add_argument("--confirm")
     dc = sub.add_parser("disconnect"); dc.add_argument("slug")
+    rp = sub.add_parser("repair"); rp.add_argument("--slug", required=True)
     return p
 
 
@@ -593,4 +647,6 @@ def run(argv):
         return _cmd_remove(args)
     if args.top == "disconnect":
         return _cmd_disconnect(args)
+    if args.top == "repair":
+        return _cmd_repair(args)
     parser.print_usage(); return 1
