@@ -175,12 +175,13 @@ def _init(args):
 
 def _index_row_cells(line):
     """Cells of one project-index table row, or None if `line` is not a data row
-    (header/separator). Splits on the LAST '|...|' segment separately from the rest so an
-    escaped '\\|' inside a wikilink alias earlier in the row cannot confuse the last-column edit."""
+    (header/separator). Splits on unescaped '|' only, so an escaped '\\|' inside a wikilink
+    alias earlier in the row (e.g. `[[projects/x/context\\|alias]]`) stays inside its cell
+    instead of shifting every later column."""
     s = line.strip()
     if not s.startswith("|") or set(s.strip("|")) <= set("- "):
         return None
-    cells = [c.strip() for c in s.strip("|").split("|")]
+    cells = [c.strip() for c in re.split(r"(?<!\\)\|", s.strip("|"))]
     return None if not cells or cells[0] == "project" else cells
 
 

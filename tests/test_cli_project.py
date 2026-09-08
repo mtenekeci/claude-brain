@@ -192,6 +192,30 @@ class ProjectCliTests(unittest.TestCase):
         self.assertIn("kept (referenced): brain-precompact.sh", out)
         self.assertTrue(os.path.exists(script))
 
+    def test_index_row_cells_splits_on_unescaped_pipe_only(self):
+        row = r"| [[projects/liryn/context\|liryn]] | code | /path | 2026-01-01 |"
+        cells = cli._index_row_cells(row)
+        self.assertEqual(len(cells), 4)
+        self.assertEqual(cells[2], "/path")
+
+    def test_clean_orphans_keeps_a_script_referenced_by_another_indexed_project(self):
+        """A project-index row with an escaped-pipe wikilink alias must still yield the real
+        `path` cell at cells[2] — otherwise `_orphan_scripts` reads the wrong column ('code')
+        and a script another project's settings.json references looks unreferenced."""
+        other_repo = os.path.join(self.tmp.name, "other-repo")
+        os.makedirs(os.path.join(other_repo, ".claude"))
+        script = os.path.join(self.tmp.name, ".claude", "brain-precompact.sh")
+        os.makedirs(os.path.dirname(script), exist_ok=True)
+        open(script, "w").close()
+        with open(os.path.join(other_repo, ".claude", "settings.json"), "w") as f:
+            f.write(json.dumps({"hooks": {"PreCompact": [{"hooks": [{"type": "command", "command": script}]}]}}))
+        idx_path = os.path.join(self.vault, "_system", "project-index.md")
+        vault.append(idx_path, "| [[projects/other/context\\|other]] | code | %s | 2026-01-01 |\n" % other_repo)
+        rc, out = self._run("status", "--clean-orphans")
+        self.assertEqual(rc, 0)
+        self.assertIn("kept (referenced): brain-precompact.sh", out)
+        self.assertTrue(os.path.exists(script))
+
     def test_config_set_async_regen_echoes_on_off(self):
         rc, out = self._run("config", "set", "async_regen", "on")
         self.assertEqual(rc, 0); self.assertIn("async_regen: on", out)
