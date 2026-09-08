@@ -87,6 +87,41 @@ class ProjectCliTests(unittest.TestCase):
         self.assertTrue(os.path.exists(self.pdir)); self.assertIsNone(project.resolve_project(self.repo))
         rc, out = self._run("disconnect", "demo"); self.assertEqual(rc, 1); self.assertIn("already be disconnected", out)
 
+    FRONTMATTER_CLAUDE_MD = ("---\ndescription: repo rules\n---\n"
+                             "# Brain: demo\n\nbrain: demo\n\nVault context is injected by the claude-brain plugin.\n---\n"
+                             "# My notes\nkeep me\n")
+
+    def test_disconnect_preserves_frontmatter_and_backs_up(self):
+        claude_md = os.path.join(self.repo, "CLAUDE.md")
+        vault.write(claude_md, self.FRONTMATTER_CLAUDE_MD)
+        rc, out = self._run("disconnect", "demo"); self.assertEqual(rc, 0)
+        text = vault.read(claude_md)
+        self.assertTrue(text.startswith("---\ndescription: repo rules\n---\n"), repr(text))
+        self.assertIn("# My notes\nkeep me\n", text)
+        self.assertNotIn("brain: demo", text)
+        backups = [f for f in os.listdir(self.repo) if f.startswith("CLAUDE.md.brain-bak")]
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(vault.read(os.path.join(self.repo, backups[0])), self.FRONTMATTER_CLAUDE_MD)
+
+    def test_remove_preserves_frontmatter_and_backs_up(self):
+        claude_md = os.path.join(self.repo, "CLAUDE.md")
+        vault.write(claude_md, self.FRONTMATTER_CLAUDE_MD)
+        rc, out = self._run("remove", "demo", "--confirm", "demo"); self.assertEqual(rc, 0)
+        text = vault.read(claude_md)
+        self.assertTrue(text.startswith("---\ndescription: repo rules\n---\n"), repr(text))
+        self.assertIn("# My notes\nkeep me\n", text)
+        backups = [f for f in os.listdir(self.repo) if f.startswith("CLAUDE.md.brain-bak")]
+        self.assertEqual(len(backups), 1)
+
+    def test_disconnect_keeps_a_frontmatter_only_claude_md(self):
+        """Nothing but frontmatter + the brain block: the file must survive with its frontmatter,
+        not be os.remove'd because `rest` happened to be empty."""
+        claude_md = os.path.join(self.repo, "CLAUDE.md")
+        vault.write(claude_md, "---\ndescription: repo rules\n---\n# Brain: demo\n\nbrain: demo\n---\n")
+        rc, out = self._run("disconnect", "demo"); self.assertEqual(rc, 0)
+        self.assertTrue(os.path.exists(claude_md))
+        self.assertEqual(vault.read(claude_md), "---\ndescription: repo rules\n---\n")
+
     def test_map_annotate(self):
         rc, out = self._run("map", "--annotate"); self.assertEqual(rc, 0); self.assertIn("src/", out)
 

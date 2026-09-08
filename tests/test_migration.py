@@ -117,6 +117,23 @@ class MigrationTests(unittest.TestCase):
         self.assertTrue(os.path.exists(bak + ".1"))
         self.assertTrue(any("brain-bak.1" in a for a in actions))
 
+    def test_migration_preserves_leading_frontmatter(self):
+        """A leading YAML frontmatter block is part of `head` for split_brain_block, so the
+        unattended v1 migration used to write it out of existence."""
+        claude_md = os.path.join(self.repo, "CLAUDE.md")
+        original = ("---\ndescription: my repo rules\nalwaysApply: true\n---\n"
+                    "# Brain: old-app\n\nvault: /Users/old/vault/projects/old-app\n---\n# My notes\n")
+        with open(claude_md, "w", encoding="utf-8") as f:
+            f.write(original)
+        proj = project.resolve_project(self.repo)
+        migrate.migrate_project(proj, self.vault, self.repo)
+        text = vault.read(claude_md)
+        self.assertTrue(text.startswith("---\ndescription: my repo rules\nalwaysApply: true\n---\n"), repr(text))
+        self.assertIn("brain: old-app", text)
+        self.assertNotIn("vault:", text)
+        self.assertTrue(text.endswith("---\n# My notes\n"))
+        self.assertEqual(read_text(claude_md + ".brain-bak"), original)
+
     def test_slim_block_matches_template(self):
         template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "CLAUDE.md")
         with open(template_path, encoding="utf-8") as f:

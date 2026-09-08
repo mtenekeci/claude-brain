@@ -470,12 +470,10 @@ def _connected_folder(path, want_slug):
 
 
 def _strip_brain_block(claude_md):
-    text = vault.read(claude_md)
-    _, rest = project.split_brain_block(text)
-    if rest.strip():
-        vault.write(claude_md, rest)
-    else:
-        os.remove(claude_md)
+    """Remove the brain block, keeping the user's frontmatter and everything below it, after a
+    `.brain-bak` copy. `remove`/`disconnect` are documented as touching only the brain block."""
+    from brain import migrate
+    migrate.rewrite_block(claude_md, lambda head: "")
 
 
 def _cmd_remove(args):
@@ -575,20 +573,10 @@ def _cmd_repair(args):
         return 1
     target_dir = existing_proj.project_dir if existing_proj is not None else cwd
     claude_md = os.path.join(target_dir, "CLAUDE.md")
-    text = vault.read(claude_md)
-    fm_prefix = text[:project.body_start(text)]
-    body = text[len(fm_prefix):]
-    if existing_proj is not None:
-        # Already has a valid brain block for this slug: preserve frontmatter, replace only
-        # the brain block, keep the rest.
-        head, rest = project.split_brain_block(body)
-    else:
-        # Absent, or present with no recognizable brain line: v1 rule is block + existing verbatim.
-        head, rest = "", body
-    name = migrate._display_name(head, slug)
-    if os.path.exists(claude_md):
-        vault.write(migrate._backup_path(claude_md), text)
-    vault.write(claude_md, fm_prefix + migrate.slim_block(name, slug) + rest)
+    # replace_existing=True: a valid brain block for this slug is replaced in place. False:
+    # absent, or present with no recognizable brain line — the v1 rule is block + file verbatim.
+    migrate.rewrite_block(claude_md, lambda head: migrate.slim_block(migrate._display_name(head, slug), slug),
+                          replace_existing=existing_proj is not None)
     fm, _ = vault.parse_frontmatter(vault.read(ctx_path))
     ctx_path_field = fm.get("path", "")
     if ctx_path_field and ctx_path_field != "—" and os.path.realpath(os.path.expanduser(ctx_path_field)) != target_dir:

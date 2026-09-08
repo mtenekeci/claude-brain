@@ -82,21 +82,49 @@ def _backup_path(claude_md):
         n += 1
     return "%s.%d" % (base, n)
 
+def rewrite_block(claude_md, make_block, replace_existing=True, backup=True):
+    """Rewrite a CLAUDE.md's brain block in place. Returns (head, rest, backup_path).
+
+    The one place that knows how to do this safely, because there are four callers
+    (`migrate_project`, `cli._cmd_repair`, `cli._strip_brain_block`, `initproj.create_project`)
+    and every earlier copy of the logic lost something:
+
+    - A leading YAML frontmatter block is part of `head` for `project.split_brain_block` (that
+      is what `body_start` exists for), so splitting the RAW text and writing `block + rest`
+      deletes the frontmatter. The prefix is carved off first and put back verbatim.
+    - `backup` writes a `.brain-bak` copy of the original before anything is rewritten. The
+      brain block can hold hand-written notes we cannot distinguish from boilerplate.
+    - `replace_existing` says whether the current head IS a brain block to replace (True) or
+      content to keep BELOW the new block (False — the v1 "no recognizable brain line" rule).
+    - `make_block(head)` builds the replacement from the old head (the display name lives there).
+      Returning "" strips the block; if nothing but whitespace is left, the file is removed.
+    """
+    text = vault.read(claude_md)
+    fm_prefix = text[:project.body_start(text)]
+    body = text[len(fm_prefix):]
+    head, rest = project.split_brain_block(body) if replace_existing else ("", body)
+    bak = None
+    if backup and os.path.exists(claude_md):
+        bak = _backup_path(claude_md)
+        vault.write(bak, text)
+    new_text = fm_prefix + make_block(head) + rest
+    if new_text.strip():
+        vault.write(claude_md, new_text)
+    elif os.path.exists(claude_md):
+        os.remove(claude_md)
+    return head, rest, bak
+
 def migrate_project(proj, vault_root, project_dir):
     actions = []
     if proj.legacy:
         text = vault.read(proj.claude_md)
-        head, rest = project.split_brain_block(text)
-        # Always back the original up verbatim before rewriting: migration is one-shot and the
-        # brain block can hold hand-written notes we have no way to distinguish from boilerplate.
-        bak = _backup_path(proj.claude_md)
-        vault.write(bak, text)
+        _, rest, bak = rewrite_block(
+            proj.claude_md, lambda head: slim_block(_display_name(head, proj.slug), proj.slug))
         note = ""
         if not rest and not _has_separator(text):
             # No `---` separator: split_brain_block treated the whole file as the brain block,
             # so anything below it would otherwise be silently dropped.
             note = " — review it for your own notes"
-        vault.write(proj.claude_md, slim_block(_display_name(head, proj.slug), proj.slug) + rest)
         actions.append("claude-md (original backed up to %s%s)" % (os.path.basename(bak), note))
     n = strip_legacy_hooks(os.path.join(project_dir, ".claude", "settings.json"))
     if n:

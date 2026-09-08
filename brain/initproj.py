@@ -166,11 +166,13 @@ def create_project(vault_root, slug, name, ptype, project_dir, repo_url):
         written["codemap"] = os.path.join(pdir, "codemap.md")
 
         cm = os.path.join(project_dir, "CLAUDE.md")
-        existing = vault.read(cm)
         if project.resolve_project(project_dir) is None:
             # v1 rule: absent -> slim_block; present with no brain line -> slim_block + existing
-            # (the slim block already ends with "---\n", which becomes the separator).
-            vault.write(cm, migrate.slim_block(name, slug) + existing)
+            # (the slim block already ends with "---\n", which becomes the separator). A leading
+            # YAML frontmatter block stays on top — rewrite_block puts the slim block below it,
+            # or the frontmatter stops being frontmatter. No backup: nothing is dropped here.
+            migrate.rewrite_block(cm, lambda head: migrate.slim_block(name, slug),
+                                  replace_existing=False, backup=False)
             written["claude_md"] = cm
 
     return written

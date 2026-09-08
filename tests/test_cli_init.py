@@ -47,6 +47,19 @@ class InitTests(unittest.TestCase):
         self.assertIn("=== SEEDING PACKET ===", out); self.assertIn("## readme", out); self.assertIn("A demo app.", out); self.assertIn("## deps", out); self.assertIn("next-auth", out)
         self.assertNotIn("# Brain:", out.split("## claude-md")[1].split("## memory")[0])           # packet shows only the user's part of CLAUDE.md
 
+    def test_init_inserts_the_block_after_existing_frontmatter(self):
+        """A CLAUDE.md that opens with YAML frontmatter and has no brain line: the slim block
+        goes BELOW the frontmatter, or the frontmatter stops being frontmatter."""
+        cm = os.path.join(self.repo, "CLAUDE.md")
+        with open(cm, "w", encoding="utf-8") as f:
+            f.write("---\ndescription: repo rules\n---\n# My notes\nkeep me\n")
+        rc, out = self._run("init", "--name", "Demo App", "--type", "code", "--no-permissions")
+        self.assertEqual(rc, 0, out)
+        text = vault.read(cm)
+        self.assertTrue(text.startswith("---\ndescription: repo rules\n---\n# Brain: Demo App\n\nbrain: demo-app\n"), repr(text))
+        self.assertTrue(text.endswith("---\n# My notes\nkeep me\n"))
+        self.assertEqual(project.resolve_project(self.repo).slug, "demo-app")
+
     def test_init_refuses_duplicate_and_is_idempotent_on_permissions(self):
         self._run("init", "--name", "Demo App", "--type", "code")
         rc, out = self._run("init", "--name", "demo app", "--type", "code")
