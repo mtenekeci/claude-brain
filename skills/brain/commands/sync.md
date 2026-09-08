@@ -18,7 +18,7 @@ This prints, among other lines: `context.md: <N> lines (cap 150)`; `last log ent
    {BRAIN} graph dismiss <slug>
    ```
 3. **Update `architecture.md`** — append any architectural discoveries from this session (new patterns, conventions, structural changes) as bullets to the relevant existing section, or a new one. Apply the Concept graph promotion rule (SKILL.md) to each: if it's the kind of fact you'd link to from more than one place, create/update its concept note and link it from the bullet.
-4. **Append the log entry.** Read `sync-prepare`'s `last log entry: Session <N> [placeholder|real]` and `next session: <M>` lines: if `[placeholder]`, replace that entry (`(pre-compact)`/`(auto-close)`) in place using session number `<N>`; if `[real]`, append a new entry using `<M>`:
+4. **Append the log entry.** This one is yours to write in full — the `Changed:` line included; the plugin only fills that in on its own `(pre-compact)` / `(auto-close)` checkpoint entries. Read `sync-prepare`'s `last log entry: Session <N> [placeholder|real]` and `next session: <M>` lines: if `[placeholder]`, replace that entry (`(pre-compact)`/`(auto-close)`) in place using session number `<N>`; if `[real]`, append a new entry using `<M>`:
    ```markdown
    ## <YYYY-MM-DD> · Session <N or M>
    Completed: <what was accomplished>

@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-brain",
-  "description": "Obsidian second brain for Claude — persistent, project-isolated context across sessions",
+  "description": "Obsidian second brain for Claude — persistent project context and a derived knowledge graph over your notes and code",
   "owner": {
     "name": "Mehmet Tenekeci",
     "email": "mehmet@tenekeci.ch"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "brain",
-      "description": "Obsidian second brain for Claude — persistent, project-isolated context across sessions with autonomous read/write",
+      "description": "Obsidian second brain for Claude — persistent project context, a derived knowledge graph over your notes and code, and a per-project code map, across every session",
       "source": "./",
       "author": {
         "name": "Mehmet Tenekeci",
