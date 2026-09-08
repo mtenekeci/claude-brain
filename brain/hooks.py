@@ -582,18 +582,8 @@ on_pre_compact.prepare = _prepare_pre_compact
 # `git -P push`, `git --work-tree=. push`) never reached `push_targets`, which has parsed those
 # correctly all along. The lookarounds exclude `-`, so `git-lfs` and `push-notify` are not `git`
 # and `push`; `[^\n;|&]` keeps the two tokens inside one command.
-_PUSH_RE = re.compile(r"(?<![\w./-])git(?![\w-])[^\n;|&]*?(?<![\w./-])push(?![\w-])")
+_PUSH_RE = re.compile(r"(?<![\w-])git(?![\w-])[^\n;|&]*?(?<![\w-])push(?![\w-])")
 _CONTINUATION_RE = re.compile(r"\\\n[ \t]*")
-
-def _join_continuations(cmd):
-    """Fold `\\`-newline line continuations back into one line. `git \\<newline>push origin main`
-    is one command to Bash, and both the gate and the segment splitter read newlines as breaks."""
-    return _CONTINUATION_RE.sub(" ", cmd or "")
-
-def looks_like_push(cmd):
-    """Cheap "is this worth parsing" test, shared by the PreToolUse gate and its prepare phase.
-    Deliberately permissive: `push_targets` is what decides, and it returns [] for a mention."""
-    return bool(_PUSH_RE.search(_join_continuations(cmd)))
 _MAIN_RULE_RE = re.compile(r"never\s+.*commit.*\bto\b.*\b(main|master)\b", re.I)
 _PUSH_VALUE_OPTS = ("-o", "--push-option", "--receive-pack", "--exec")
 # Options that push branches the command never names — the branch rules cannot be applied.
@@ -617,6 +607,17 @@ _WRAPPERS = ("then", "do", "else", "elif", "if", "while", "until", "{", "}", "!"
 # command word — a bare `git`, or an interpreter whose argument it can parse one level deep.
 _ARG_WRAPPERS = ("env", "command", "sudo", "nohup", "time", "timeout", "xargs")
 _SHELLS = ("bash", "sh", "zsh", "dash", "ksh")
+
+def _join_continuations(cmd):
+    r"""Fold a `\`-newline line continuation back into one line. `git \<newline>push origin main`
+    is one command to Bash, and both the gate and the segment splitter read a newline as a break."""
+    return _CONTINUATION_RE.sub(" ", cmd or "")
+
+def looks_like_push(cmd):
+    """Cheap "is this worth parsing at all" test, shared by the PreToolUse gate and its prepare
+    phase. Deliberately permissive — `push_targets` is what decides, and it returns [] for a
+    command that merely mentions a push."""
+    return bool(_PUSH_RE.search(_join_continuations(cmd)))
 # A segment that is a `git push` the parser cannot resolve to concrete branch names. It is a
 # TARGET, not a branch: `on_pre_tool_use` denies on it outright. The distinction matters — the
 # obvious "conservative fallback", the current branch, is exactly the value both deny rules
