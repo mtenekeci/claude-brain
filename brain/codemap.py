@@ -396,3 +396,32 @@ def parse_modules(curated):
 
 def parse_where(curated):
     return [{"question": r[0], "path": r[1]} for r in _table_rows(curated, "Where to look", 2)]
+
+def _covers(row_path, d):
+    """A Modules row covers directory `d` if its path is `d` (or a file/dir inside it), or
+    is an ancestor directory of `d` — either direction of prefix match on '/'-delimited paths."""
+    rp = row_path.rstrip("/")
+    return rp == d or rp.startswith(d + "/") or d.startswith(rp + "/")
+
+def unannotated_dirs(project_dir, curated, min_files=3):
+    """Top-two-level directories with >= `min_files` source files not covered by any Modules
+    row. 'top-two-level' bounds which directories can be *candidates* (depth 1 or 2 from the
+    repo root) — the file count for a candidate still includes every file nested beneath it,
+    so a directory with several two-deep subdirectories still surfaces as one candidate."""
+    files = list_files(project_dir)
+    candidates = set()
+    for rel in files:
+        parts = rel.split("/")[:-1]
+        if not parts:
+            continue
+        candidates.add(parts[0])
+        if len(parts) >= 2:
+            candidates.add("/".join(parts[:2]))
+    covered = [r["path"] for r in parse_modules(curated) if r.get("path")]
+    out = []
+    for d in candidates:
+        count = sum(1 for rel in files if rel.startswith(d + "/"))
+        if count >= min_files and not any(_covers(p, d) for p in covered):
+            out.append((d, count))
+    out.sort(key=lambda x: (-x[1], x[0]))
+    return out

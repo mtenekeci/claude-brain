@@ -28,19 +28,45 @@ def save_config(data):
         f.write("\n")
     os.replace(tmp, path)
 
+_GATE_VALUES = ("all", "commits", "off")
+_ON_VALUES = ("on", "true", "1", "yes")
+_OFF_VALUES = ("off", "false", "0", "no")
+_BACKEND_VALUES = ("builtin", "graphify", "auto")
+
 def set_value(key, value):
-    """Minimal `brain config set` mechanics. `vault` is expanduser+realpath'd and must already
-    exist as a directory — callers (e.g. `brain init --vault`) create it first. Task 3 extends
-    this with more keys/validation; keep additions here self-contained."""
+    """`brain config set` mechanics. `key` is one of vault|gate|async_regen|graph.backend.
+    Raises ValueError on an invalid key or value; callers (the CLI) turn that into exit 1.
+    Returns the full config dict after the write."""
     data = load_config()
     if key == "vault":
         v = os.path.realpath(os.path.expanduser(value))
         if not os.path.isdir(v):
             raise ValueError("brain: vault directory does not exist: %s" % v)
-        value = v
-    data[key] = value
+        data["vault"] = v
+    elif key == "gate":
+        if value not in _GATE_VALUES:
+            raise ValueError("brain: gate must be one of %s" % ", ".join(_GATE_VALUES))
+        data["gate"] = value
+    elif key == "async_regen":
+        if isinstance(value, bool):
+            data["async_regen"] = value
+        elif str(value).lower() in _ON_VALUES:
+            data["async_regen"] = True
+        elif str(value).lower() in _OFF_VALUES:
+            data["async_regen"] = False
+        else:
+            raise ValueError("brain: async_regen must be on/off")
+        # bool JSON round-trips fine, but callers that read it back as True/False rely on `value`
+        # being what gets echoed — normalize once so the CLI does not have to re-derive it.
+        value = data["async_regen"]
+    elif key == "graph.backend":
+        if value not in _BACKEND_VALUES:
+            raise ValueError("brain: graph.backend must be one of %s" % ", ".join(_BACKEND_VALUES))
+        data.setdefault("graph", {})["backend"] = value
+    else:
+        raise ValueError("brain: unknown config key: %s" % key)
     save_config(data)
-    return value
+    return data
 
 def gate_mode():
     """'all' (default) | 'commits' | 'off' — Stop-gate setting (spec §7.7)."""
