@@ -146,6 +146,21 @@ class SessionStartGraphTests(unittest.TestCase):
         self.assertEqual((sha, gen.strip()), ("", ""))                     # empty generated block
         self.assertIn("## Modules", curated)                               # curated template present
 
+    def test_large_repo_with_async_off_builds_synchronously(self):
+        """async_regen off means no background process will ever fill the stub in, so the
+        foreground build is the only path left — a permanently empty code map is worse."""
+        write_config(self.tmp.name, self.vault, extra={"async_regen": False})
+        orig_lf = hooks.codemap.list_files
+        real = orig_lf(self.repo)
+        hooks.codemap.list_files = lambda d: real + ["pad/%d.ts" % i for i in range(3000)]
+        try:
+            hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        finally:
+            hooks.codemap.list_files = orig_lf
+        text = open(os.path.join(self.pdir, "codemap.md"), encoding="utf-8").read()
+        self.assertIn("src/auth/session.ts", text)                                  # not a stub: built in the foreground
+        self.assertFalse(state.SessionState.load("s1").codemap_stale)               # nothing was deferred
+
     def test_heavy_work_runs_before_the_lock(self):
         order = []
         orig_locked, orig_load = hooks.state.locked, hooks.graph.load

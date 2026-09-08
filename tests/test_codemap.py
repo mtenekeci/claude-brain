@@ -138,6 +138,27 @@ class CodemapRenderTests(unittest.TestCase):
         self.assertNotIn("src/  (200 files, collapsed)", lines)
         self.assertIn("package.json", lines)                      # root files never collapse
 
+    def _assert_no_collapsed_dir_beside_its_descendants(self, out):
+        body = [l for l in out.splitlines()[4:] if l]
+        for c in [l for l in body if "collapsed" in l]:
+            prefix = c.split("  ")[0]                       # "src/a/" — every descendant starts with it
+            self.assertFalse(any(l != c and l.startswith(prefix) for l in body),
+                             "collapsed dir rendered beside its descendants: %r in %r" % (c, body))
+
+    def test_collapsed_dir_absorbs_all_descendants(self):
+        files = [{"path": "src/%s/f%d.ts" % (d, i), "lines": 1, "symbols": [], "imports": []} for d in "abcdef" for i in range(4)]
+        out = codemap.render_generated({"sha": "x", "files": files, "deps": [], "generated_at": 0}, cap=13)
+        self._assert_no_collapsed_dir_beside_its_descendants(out)
+
+    def test_collapsing_a_shallow_dir_absorbs_its_nested_subtree(self):
+        """A dir wins on direct children while a deeper subtree is still expanded: collapsing it
+        must take the whole subtree with it, never leave `src/` sitting above `src/deep/nest/*`."""
+        files = [{"path": "src/f%d.ts" % i, "lines": 1, "symbols": [], "imports": []} for i in range(6)]
+        files += [{"path": "src/deep/nest/g%d.ts" % i, "lines": 1, "symbols": [], "imports": []} for i in range(3)]
+        out = codemap.render_generated({"sha": "x", "files": files, "deps": [], "generated_at": 0}, cap=10)
+        self._assert_no_collapsed_dir_beside_its_descendants(out)
+        self.assertIn("src/  (9 files, collapsed)", out)       # count covers the nested files too
+
     def test_render_generated_leaves_the_tree_expanded_when_it_fits(self):
         # 201 lines + 4 header lines + the trailer slot, so the cap has to clear ~206.
         out = codemap.render_generated(self._nested_layer(), cap=250)

@@ -1,14 +1,13 @@
 {
-  "description": "claude-brain v2: vault injection, per-prompt retrieval, subagent briefing, enforcement gate",
+  "description": "claude-brain v2: vault injection, per-prompt retrieval, subagent briefing + vault-notes reminders, enforcement gate",
   "hooks": {
     "SessionStart": [{"matcher": "startup|resume|compact|fork", "hooks": [{"type": "command", "timeout": 10, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SessionStart"}]}],
     "UserPromptSubmit": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook UserPromptSubmit"}]}],
-    "PostToolUse": [{"matcher": "Bash|Read|Edit|Write|MultiEdit", "hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PostToolUse"}]}],
+    "PostToolUse": [{"matcher": "Bash|Read|Edit|Write|MultiEdit|Agent", "hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PostToolUse"}]}],
     "Stop": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook Stop"}]}],
     "PreCompact": [{"hooks": [{"type": "command", "timeout": 10, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PreCompact"}]}],
     "SessionEnd": [{"hooks": [{"type": "command", "timeout": 1, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SessionEnd"}]}],
     "PreToolUse": [{"matcher": "Bash|Grep|Glob", "hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook PreToolUse"}]}],
-    "SubagentStart": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SubagentStart"}]}],
-    "SubagentStop": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SubagentStop"}]}]
+    "SubagentStart": [{"hooks": [{"type": "command", "timeout": 5, "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/brain/__main__.py\" hook SubagentStart"}]}]
   }
 }

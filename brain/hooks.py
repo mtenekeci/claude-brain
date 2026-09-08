@@ -9,8 +9,12 @@ _INJECTED_CAP = 300             # bound on ctx.state.injected — a long session
 SOURCE_EXTS = codemap.SOURCE_EXTS
 
 class HookResult(object):
-    def __init__(self, stdout="", json=None, exit_code=0):
+    def __init__(self, stdout="", json=None, exit_code=0, after_lock=None):
         self.stdout, self.json, self.exit_code = stdout, json, exit_code
+        # after_lock: a zero-arg callable dispatch() runs once the session lock is released.
+        # For work a handler can only *decide* under the lock (it needs state) but must not
+        # *do* there — today: the detached `map --regen` spawn.
+        self.after_lock = after_lock
 
 EMPTY = HookResult()
 
@@ -77,7 +81,13 @@ def dispatch(event, payload):
         with state.locked(ctx.session_id, timeout=timeout) as s:
             ctx.attach_state(s)
             result = handler(ctx)
-        return result or EMPTY
+        result = result or EMPTY
+        if result.after_lock is not None:
+            try:
+                result.after_lock()
+            except Exception as e:      # post-lock work is best-effort: never cost the event
+                config.log_error("%s after_lock failed: %r" % (event, e))
+        return result
     except Exception:
         config.log_error("%s failed: %s" % (event, traceback.format_exc().strip().splitlines()[-1]))
         return EMPTY
@@ -91,22 +101,29 @@ def _banner(title):
 
 _REGEN_MIN_INTERVAL = 60.0
 
-def _spawn_regen(ctx, force=False):
-    """Fire-and-forget `map --regen` in a detached process. At most once per minute per session,
-    and never when the config disables background regeneration."""
-    if not config.async_regen():
-        return False
-    now = time.time()
-    if now - ctx.state.last_regen_spawn_at < _REGEN_MIN_INTERVAL:
-        return False
+def _spawn_regen_process(project_dir, force=False):
+    """Fire-and-forget `map --regen` in a detached process. Touches no session state, so it can
+    run either before the lock (SessionStart's prepare) or after it (PostToolUse's after_lock) —
+    never inside, where a Popen would stretch a 1 ms critical section into tens of ms."""
     main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__main__.py")
     argv = [sys.executable, main_py, "map", "--regen"] + (["--force"] if force else []) + ["--quiet"]
     try:
-        subprocess.Popen(argv, cwd=ctx.project.project_dir,
+        subprocess.Popen(argv, cwd=project_dir,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     except Exception as e:      # Popen can raise more than OSError (bad argv types, ValueError)
         config.log_error("spawn regen failed: %r" % e)
+        return False
+    return True
+
+def _claim_regen_slot(ctx, enabled):
+    """Rate limit, under the lock: True at most once a minute per session, and only when
+    background regeneration is enabled. Records the claim so a peer event cannot re-spawn;
+    the caller performs the actual Popen outside the lock."""
+    if not enabled:
+        return False
+    now = time.time()
+    if now - ctx.state.last_regen_spawn_at < _REGEN_MIN_INTERVAL:
         return False
     ctx.state.last_regen_spawn_at = now
     return True
@@ -136,6 +153,14 @@ def _prepare_session_start(ctx):
             # A full build_layer() here would read every source file synchronously before the
             # user's first prompt. Write the scaffold; the detached --force regen fills it in.
             codemap.ensure_stub(ctx.project.project_dir, ctx.pdir)
+            if config.async_regen():
+                # Outside the lock by construction: prepare() runs before state.locked().
+                pre["spawned"] = _spawn_regen_process(ctx.project.project_dir, force=True)
+            else:
+                # No background process will ever fill the stub in, so the foreground build is
+                # the only path left — an empty code map all session is the worse trade.
+                codemap.regenerate(ctx.project.project_dir, ctx.pdir, files=files)
+                pre["built_sync"] = True
         else:
             codemap.ensure(ctx.project.project_dir, ctx.pdir, files=files)
             codemap.regenerate(ctx.project.project_dir, ctx.pdir, files=files)
@@ -177,9 +202,9 @@ def on_session_start(ctx):
         ctx.state.log_entries_at_start = ctx.pre.get("log_entries", 0)
     if not ctx.state.last_head_sha:
         ctx.state.last_head_sha = ctx.pre.get("head_sha", "")
-    ctx.state.codemap_stale = bool(ctx.pre.get("large"))
-    if ctx.pre.get("large"):
-        _spawn_regen(ctx, force=True)
+    ctx.state.codemap_stale = bool(ctx.pre.get("large")) and not ctx.pre.get("built_sync")
+    if ctx.pre.get("spawned"):
+        ctx.state.last_regen_spawn_at = time.time()   # the Popen itself already ran, pre-lock
     parts = [_protocol(ctx).rstrip("\n"), ""]
     context_text = vault.read(ctx.context_path)
     if not context_text:
@@ -252,16 +277,29 @@ def _read_nudge(ctx):
         return EMPTY
     return HookResult("Brain: %d source files read — add what you learned to %s (+ a codemap Modules row if it's a module). Concept note only if you'd link it from more than one place.\n" % (s.reads, ctx.arch_path))
 
+def _vault_notes_reminder(ctx):
+    return ("Brain: subagent reported vault notes — fold them into %s / codemap.md ## Modules now "
+            "(a concept note only if you'd link it from more than one place).\n" % ctx.arch_path)
+
 def _prepare_post_tool_use(ctx):
-    """Runs BEFORE the session lock: all git subprocess calls for this event live here."""
+    """Runs BEFORE the session lock: all git subprocess calls and config reads for this event."""
     ti = ctx.payload.get("tool_input") or {}
-    if str(ctx.payload.get("tool_name") or "") != "Bash" or not is_git_commit(str(ti.get("command") or "")):
+    tool = str(ctx.payload.get("tool_name") or "")
+    if tool in ("Edit", "Write", "MultiEdit"):
+        return {"async_regen": config.async_regen()}
+    if tool != "Bash" or not is_git_commit(str(ti.get("command") or "")):
         return {}
     return {"sha": gitinfo.head_sha(ctx.cwd), "branch": gitinfo.current_branch(ctx.cwd), "subject": gitinfo.last_subject(ctx.cwd)}
 
 def on_post_tool_use(ctx):
     tool = str(ctx.payload.get("tool_name") or "")
     ti = ctx.payload.get("tool_input") or {}
+    if tool == "Agent":
+        # A foreground subagent's result lands in the PARENT turn, which is the only place the
+        # notes can actually be written. (SubagentStop's output never reached it — SMOKE.md #10.)
+        if "Vault notes:" in str(ctx.payload.get("tool_response") or ""):
+            return HookResult(_vault_notes_reminder(ctx))
+        return EMPTY
     if tool == "Bash":
         cmd = str(ti.get("command") or "")
         if is_git_commit(cmd):
@@ -296,7 +334,11 @@ def on_post_tool_use(ctx):
             ctx.state.note_vault_write()
         elif is_source_path(p) and under(p, ctx.project.project_dir):
             ctx.state.note_source_edit(p)
-            _spawn_regen(ctx)         # no --force: the fingerprint already reflects uncommitted edits
+            # Decided (and rate-limited) under the lock because it reads session state; spawned
+            # after it. No --force: the fingerprint already reflects uncommitted edits.
+            if _claim_regen_slot(ctx, ctx.pre.get("async_regen")):
+                project_dir = ctx.project.project_dir
+                return HookResult(after_lock=lambda: _spawn_regen_process(project_dir))
         return EMPTY
     return EMPTY
 
@@ -328,11 +370,15 @@ def on_stop(ctx):
     return HookResult(json={"decision": "block", "reason": reason.replace("{context}", ctx.context_path)})
 
 def _prepare_user_prompt_submit(ctx):
-    """Pre-lock: tokenise the prompt and build/load the graph. The locked body only reads and
-    writes session state and renders what is already in memory."""
+    """Pre-lock: classify the prompt, then tokenise it and build/load the graph. The locked body
+    only reads and writes session state and renders what is already in memory. A sign-off or a
+    subagent completion notice short-circuits BEFORE the graph load: neither can earn a
+    retrieval, and loading the graph to throw it away is the most expensive no-op we have."""
     prompt = str(ctx.payload.get("prompt") or "")
-    if retrieve.is_system_prompt(prompt):
-        return {}
+    done = retrieve.is_done_signal(prompt)
+    notes = prompt.lstrip().startswith("<task-notification>") and "Vault notes:" in prompt
+    if done or notes or retrieve.is_system_prompt(prompt):
+        return {"done": done, "notes": notes}
     terms = retrieve.tokens(prompt)
     if not terms:
         return {}
@@ -348,11 +394,15 @@ def on_user_prompt_submit(ctx):
     prompt = str(ctx.payload.get("prompt") or "")
     if not prompt.lstrip().startswith("<task-notification>"):
         ctx.state.stop_blocks_this_turn = 0
+    if ctx.pre.get("notes"):
+        # A background subagent finished and reported vault notes; this notice is the parent's
+        # only sight of them.
+        return HookResult(_vault_notes_reminder(ctx))
     if retrieve.is_system_prompt(prompt):
         return EMPTY
     s = ctx.state
     already = set(s.injected)
-    if retrieve.is_done_signal(prompt) and (s.commits_since_vault_write + s.source_edits_since_vault_write) > 0:
+    if ctx.pre.get("done") and (s.commits_since_vault_write + s.source_edits_since_vault_write) > 0:
         return HookResult("Brain: user signalled done — write the log entry and update ## State / ## Active Work in %s now.\n" % ctx.context_path)
     g, terms = ctx.pre.get("graph"), ctx.pre.get("terms")
     if g is None or not terms:
@@ -443,10 +493,32 @@ _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 def _is_redir(t):
     return bool(_REDIR_RE.match(t)) or t in ("&>", "&>>")
 
+# `<<WORD`, `<<-WORD`, `<<'WORD'`. `(?!<)` keeps a `<<<` herestring out of it.
+_HEREDOC_RE = re.compile(r"<<(?!<)-?\s*[\"']?(\w+)[\"']?")
+
+def _strip_heredocs(cmd):
+    """Drop heredoc bodies: their lines are data for the command, not commands themselves, so
+    `cat <<EOF ... git push origin main ... EOF` is not a push. A `<<` with no matching
+    terminator line is not a heredoc (it is a `<<` inside a quoted string) — nothing is dropped
+    then, because swallowing lines would blind the push guard."""
+    lines = (cmd or "").split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        for word in _HEREDOC_RE.findall(line):
+            j = i
+            while j < len(lines) and lines[j].strip() != word:
+                j += 1
+            if j < len(lines):
+                i = j + 1               # skip the body and its terminator
+    return "\n".join(out)
+
 def push_targets(cmd, current_branch):
     """Branch names a Bash command would push to. Parses real `git push` segments only (never quoted/echoed text)."""
     targets = []
-    for seg in _SEGMENT_RE.split(cmd or ""):
+    for seg in _SEGMENT_RE.split(_strip_heredocs(cmd)):
         try:
             toks = shlex.split(seg.strip(), comments=True)
         except ValueError:
@@ -553,23 +625,14 @@ def on_subagent_start(ctx):
         return EMPTY
     return HookResult(json={"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": briefing.text(ctx)}})
 
-def on_subagent_stop(ctx):
-    msg = str(ctx.payload.get("last_assistant_message") or "")
-    if "Vault notes:" not in msg:
-        return EMPTY
-    who = str(ctx.payload.get("agent_type") or "subagent")
-    text = ("Brain: subagent '%s' reported vault notes — fold them into %s / codemap.md ## Modules "
-            "now (a concept note only if you'd link it from more than one place)." % (who, ctx.arch_path))
-    # Both channels on purpose. SMOKE.md check 10 measured what actually happens: neither shape
-    # reaches the PARENT turn — the text is fed back into the finished subagent's own loop, which
-    # answers it and stops (the "Vault notes:" guard fails on that second reply, so it never
-    # loops). systemMessage is added because it is the documented parent-facing channel and costs
-    # nothing; the honest status is recorded in SMOKE.md "Last run".
-    return HookResult(json={"hookSpecificOutput": {"hookEventName": "SubagentStop", "additionalContext": text},
-                            "systemMessage": text})
+# SubagentStop is deliberately NOT handled. SMOKE.md check 10 measured it: neither
+# additionalContext nor systemMessage reaches the PARENT turn — the text is fed back into the
+# finished subagent's own loop, so the reminder lands where nobody can act on it. The two
+# channels that DO reach the parent replace it: PostToolUse on a foreground `Agent` call, and
+# the `<task-notification>` prompt a background agent's completion submits.
 
-# One registry, defined after every handler. hooks/hooks.json registers exactly these nine
-# events; the parity test in tests/test_hooks_session.py keeps the two in step.
+# One registry, defined after every handler. hooks/hooks.json registers exactly these eight
+# events; the parity test in tests/test_hooks_agent_notes.py keeps the two in step.
 _HANDLERS = {
     "SessionStart": on_session_start,
     "SessionEnd": on_session_end,
@@ -579,5 +642,4 @@ _HANDLERS = {
     "Stop": on_stop,
     "PreCompact": on_pre_compact,
     "SubagentStart": on_subagent_start,
-    "SubagentStop": on_subagent_stop,
 }

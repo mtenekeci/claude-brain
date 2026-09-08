@@ -61,6 +61,18 @@ class RetrieveTests(unittest.TestCase):
         r5 = hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo, prompt="thanks, looks good"))
         self.assertIn("write the log entry", r5.stdout)
 
+    def test_done_signal_skips_graph_load(self):
+        """A sign-off never earns a retrieval: the done check runs in prepare(), before the load."""
+        calls = []
+        orig = hooks.graph.load
+        hooks.graph.load = lambda *a, **k: calls.append(1) or orig(*a, **k)
+        try:
+            s = state.SessionState.load("s1"); s.note_source_edit("/r/a.py"); s.save()
+            r = hooks.dispatch("UserPromptSubmit", payload("UserPromptSubmit", self.repo, prompt="thanks, looks good"))
+        finally:
+            hooks.graph.load = orig
+        self.assertIn("write the log entry", r.stdout); self.assertEqual(calls, [])
+
     def test_injected_list_is_capped(self):
         s = state.SessionState.load("s1")
         s.injected = ["dummy:%d" % i for i in range(300)]

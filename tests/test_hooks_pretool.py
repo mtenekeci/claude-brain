@@ -41,6 +41,12 @@ class PreToolUseTests(unittest.TestCase):
         # leading VAR=value assignments precede the command word
         self.assertEqual(pt("GIT_SSH=x git push origin main", "feat/x"), ["main"])
         self.assertEqual(pt("A=1 B=2 env git push origin main", "feat/x"), ["main"])
+        # a heredoc body is data, not commands — but real segments after the terminator still count
+        self.assertEqual(pt("cat <<EOF\ngit push origin main\nEOF", "feat/x"), [])
+        self.assertEqual(pt("cat <<'EOF'\ngit push origin main\nEOF\ngit push origin feat/x", "feat/x"), ["feat/x"])
+        self.assertEqual(pt("cat <<-END\ngit push origin main\nEND", "feat/x"), [])
+        # a '<<' with no matching terminator line is not a heredoc: nothing may be swallowed
+        self.assertEqual(pt('echo "a << b"\ngit push origin main', "feat/x"), ["main"])
 
     def test_push_guard_denies_mismatch_and_protected_main_by_target(self):
         # fixture Hard Rules contain "Never commit directly to `main`."; repo is on main

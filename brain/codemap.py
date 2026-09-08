@@ -268,10 +268,12 @@ def render_generated(layer, cap=150):
     header = ["# Code map (generated \u2014 do not edit above the end marker)", "head: %s" % (layer.get("sha") or "-"),
               "deps: %s" % (", ".join(deps) or "-"), ""]
     budget = cap - len(header) - 1
-    # key -> (owning directory, rendered line, files represented). A directory "owns" only the
-    # lines directly beneath it, so each round collapses the deepest, fattest directory; a
-    # parent becomes collapsible only once its children are single lines. The repo root ("")
-    # is never a candidate, so top-level files always survive.
+    # key -> (owning directory, rendered line, files represented). A key ending in "/" is an
+    # already-collapsed directory. Candidates are chosen on *direct* children, so each round
+    # folds the deepest, fattest directory and a parent becomes collapsible only once its
+    # children are single lines; the repo root ("") is never a candidate, so top-level files
+    # always survive. Collapsing absorbs every remaining descendant, not just the direct
+    # children — otherwise "src/" can end up rendered right above "src/deep/nest/x.ts".
     items = dict((f["path"], (_dir_of(f["path"]), _file_line(f), 1)) for f in layer["files"])
     while len(items) > budget:
         owners = {}
@@ -282,8 +284,9 @@ def render_generated(layer, cap=150):
         if not cand:
             break                       # nothing left to fold — the trailer below takes over
         d = cand[0][1]
-        total = sum(items[k][2] for k in owners[d])
-        for k in owners[d]:
+        absorbed = [k for k in items if k == d or k.startswith(d + "/")]
+        total = sum(items[k][2] for k in absorbed)
+        for k in absorbed:
             del items[k]
         items[d + "/"] = (_dir_of(d), "%s/  (%d files, collapsed)" % (d, total), total)
     body = sorted(line for _, line, _ in items.values())

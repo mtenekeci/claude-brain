@@ -192,7 +192,17 @@ env BRAIN_CONFIG="$S/brain.config" CLAUDE_PLUGIN_DATA="$S/data" \
 
 Expect: first line is `project smoke  projects/smoke/context.md  — smoke  (N)`.
 
-### Check 10 — SubagentStop reminder
+### Check 10 — vault-notes reminder (PostToolUse on `Agent`)
+
+> Plan 3: `SubagentStop` is gone — the "Last run" note below proved its output goes to the
+> finished subagent, not the parent. The reminder now rides the parent-visible channels:
+> `PostToolUse` on the foreground `Agent` tool call (this check) and, for a background agent,
+> the `<task-notification>` prompt (`UserPromptSubmit`). Re-run the prompt below unchanged;
+> the expected line is now `Brain: subagent reported vault notes — fold them into
+> .../architecture.md / codemap.md ## Modules now ...` (no agent type in it), and it must
+> reach the PARENT. To see whether the hook fired, log from `on_post_tool_use`'s `Agent`
+> branch instead of the deleted `on_subagent_stop`.
+
 
 Same sandbox and flags as Checks 6-9, plus `Agent,Task` in `--allowedTools`.
 
