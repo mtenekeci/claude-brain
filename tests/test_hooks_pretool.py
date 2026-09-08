@@ -64,18 +64,46 @@ class PreToolUseTests(unittest.TestCase):
         # `timeout`/`xargs` take their own arguments before the command word
         self.assertEqual(pt("timeout 30 git push origin main", "feat/x"), ["main"])
         self.assertEqual(pt("nohup timeout -k 5 30 git push origin main", "feat/x"), ["main"])
-        # a wrapper with no bare `git` token left is opaque, not "no push"
-        self.assertEqual(pt("timeout 30 bash -c 'git push origin main'", "feat/x"), ["feat/x"])
+        # a wrapper skips its own arguments to the command word it runs; a wrapper with no
+        # command word left at all is opaque, not "no push"
+        self.assertEqual(pt("timeout 30 bash -c 'git push origin main'", "feat/x"), ["main"])
         self.assertEqual(pt("timeout 30 make build", "feat/x"), [])
+        self.assertEqual(pt("xargs -n1 make 'git push origin main'", "feat/x"), [hooks.UNPARSED])
         # `bash -c` is parsed exactly one level deep, and never yields [] when it does push
         self.assertEqual(pt("bash -c 'git push origin main'", "feat/x"), ["main"])
         self.assertEqual(pt("sh -c 'git push origin main'", "feat/x"), ["main"])
         self.assertEqual(pt("sh -c 'echo hi'", "feat/x"), [])
-        # opaque payload that still contains a push: the conservative target, never []
-        self.assertEqual(pt("bash -c \"echo 'git push origin main'\"", "feat/x"), ["feat/x"])
-        # an unparseable segment (an apostrophe inside double quotes, a paren inside a string)
-        # is conservative too — a dropped segment used to be a silent allow
-        self.assertEqual(pt('git push origin main "(note)"', "feat/x"), ["feat/x"])
+        # a payload the nested parse cannot read, but which does push: the UNPARSED sentinel,
+        # never [] and never the current branch (which both deny rules treat as permitted)
+        self.assertEqual(pt("bash -c \"echo 'git push origin main'\"", "feat/x"), [hooks.UNPARSED])
+
+    def test_push_targets_handles_keywords_in_command_position_and_arg_taking_wrappers(self):
+        """The six shapes the re-review measured as false ALLOWs after round 1."""
+        pt = hooks.push_targets
+        self.assertEqual(pt("if git push origin main; then echo ok; fi", "feat/x"), ["main"])
+        self.assertEqual(pt("while ! git push origin main; do sleep 1; done", "feat/x"), ["main"])
+        self.assertEqual(pt("until git push origin main; do sleep 1; done", "feat/x"), ["main"])
+        self.assertEqual(pt("eval 'git push origin main'", "feat/x"), ["main"])
+        self.assertEqual(pt("eval git push origin main", "feat/x"), ["main"])
+        self.assertEqual(pt("sudo -u x git push origin main", "feat/x"), ["main"])
+        self.assertEqual(pt("timeout 30 bash -c 'git push origin main'", "feat/x"), ["main"])
+        self.assertEqual(pt("env -i git push origin main", "feat/x"), ["main"])
+
+    def test_segments_split_only_on_unquoted_separators(self):
+        """A paren (or `;`, or `|`) inside a quoted argument is data, not a separator. Splitting
+        there left a half-segment that no longer tokenised — turning a push the guard used to
+        catch into one it could not read."""
+        pt = hooks.push_targets
+        self.assertEqual(pt('git push origin main --push-option="ref (x)"', "feat/x"), ["main"])
+        # both are real refspecs to git, so both are reported; the point is that `main` survives
+        self.assertEqual(pt('git push origin main "(note)"', "feat/x"), ["main", "(note)"])
+        self.assertEqual(pt("git push origin main --push-option='a;b'", "feat/x"), ["main"])
+        # …while an unquoted paren still opens a segment of its own
+        self.assertEqual(pt("(git push origin main)", "feat/x"), ["main"])
+        self.assertEqual(pt("x=$(git push origin main)", "feat/x"), ["main"])
+        self.assertEqual(hooks.split_segments("a && b || c ; d | e & f\ng"),
+                         ["a ", " b ", " c ", " d ", " e ", " f", "g"])
+        self.assertEqual(hooks.split_segments("echo 'a;b(c)'"), ["echo 'a;b(c)'"])
 
     def test_push_targets_ignores_herestrings_redirections_and_tags(self):
         pt = hooks.push_targets
@@ -105,6 +133,33 @@ class PreToolUseTests(unittest.TestCase):
         self.assertIsNone(self._pre("Bash", command="git push -u origin feat/x").json)
         self.assertIsNone(self._pre("Bash", command="echo 'git push origin main'").json)
         self.assertIsNone(self._pre("Bash", command="git status").json)
+
+    def test_wrapped_pushes_to_main_deny_end_to_end(self):
+        """The unit table proves the parse; this proves the DECISION. The re-review measured all
+        of these as ALLOW in the standard configuration — branch `feat/x` checked out, matching
+        `branch:` frontmatter, and a Hard Rule forbidding `main` — because the round-1 fallback
+        returned the current branch, which is exactly the value both deny rules treat as fine."""
+        subprocess.run(["git", "-C", self.repo, "checkout", "-q", "-b", "feat/x"], check=True)
+        vault.write(self.ctx_path, vault.set_frontmatter(vault.read(self.ctx_path), "branch", "feat/x"))
+        for cmd in ("if git push origin main; then echo ok; fi",
+                    "while ! git push origin main; do sleep 1; done",
+                    "until git push origin main; do sleep 1; done",
+                    "eval 'git push origin main'",
+                    "sudo -u x git push origin main",
+                    "timeout 30 bash -c 'git push origin main'",
+                    'git push origin main --push-option="ref (x)"',
+                    "(git push origin main)",
+                    "bash -c \"echo 'git push origin main'\""):        # opaque → the sentinel
+            r = self._pre("Bash", command=cmd)
+            self.assertIsNotNone(r.json, cmd)
+            self.assertEqual(r.json["hookSpecificOutput"]["permissionDecision"], "deny", cmd)
+        # the sentinel's own message names the fix, rather than blaming a branch it never read
+        r = self._pre("Bash", command="bash -c \"echo 'git push origin main'\"")
+        self.assertIn("could not parse the push target", r.json["hookSpecificOutput"]["permissionDecisionReason"])
+        # …and none of this turns a legitimate push into a denial
+        self.assertIsNone(self._pre("Bash", command="git push -u origin feat/x").json)
+        self.assertIsNone(self._pre("Bash", command="timeout 30 git push origin feat/x").json)
+        self.assertIsNone(self._pre("Bash", command="echo 'git push origin main'").json)
 
     def test_grep_glob_hints_never_block(self):
         r = self._pre("Grep", pattern="Session(Store|Manager)", path=self.repo)

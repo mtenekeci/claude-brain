@@ -583,23 +583,64 @@ _PUSH_VALUE_OPTS = ("-o", "--push-option", "--receive-pack", "--exec")
 _GIT_GLOBAL_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")
 _GIT_GLOBAL_FLAG_OPTS = ("--no-pager", "-P", "--no-optional-locks")
 _REDIR_RE = re.compile(r"^\d*[<>]{1,2}(&\d+)?$")
-# Segment separators: `||` and `&&` first (so they are not split as two bare `|`/`&`), then
-# `;`, a bare `|` pipe, a bare `&` (backgrounding), a newline — a multi-line Bash body hides a
-# push on its second line otherwise — and `(`/`)`, so a subshell's body is its own segment.
-_SEGMENT_RE = re.compile(r"\|\||&&|[;|&\n()]")
 # `VAR=value` prefixes sit between the segment start and the command word, exactly like
 # env/command/sudo do: `GIT_SSH=x git push` is still a push.
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # Words that can stand between the start of a segment and the command word without changing
-# what the command is. Shell keywords (`then`/`do`/`else`/`elif`, a group's `{`/`}`, `!`) matter
-# because `if …; then git push origin main; fi` is a shape an agent writes unprompted.
-_WRAPPERS = ("env", "command", "sudo", "nohup", "time", "then", "do", "else", "elif", "{", "}", "!")
-# These take their OWN arguments before the command word, so stripping the wrapper alone leaves
-# `30 git push …` and the segment reads as "not a git command". Skipping ahead to the first
-# `git` token can only ADD targets — the previous behaviour was none at all — so the worst case
-# is a false DENY on `timeout 5 echo git push`, which is the safe direction for a guard.
-_ARG_WRAPPERS = ("timeout", "xargs")
+# what the command is, and that take no arguments of their own. The shell keywords matter
+# because `if git push origin main; then …` and `while ! git push …; do …; done` are shapes an
+# agent writes unprompted — `if`/`while`/`until` sit in COMMAND position, so a segment starting
+# with one is a real command with a keyword bolted on the front.
+_WRAPPERS = ("then", "do", "else", "elif", "if", "while", "until", "{", "}", "!")
+# These take their OWN arguments before the command word (`timeout 30 …`, `sudo -u x …`,
+# `env -i …`), so stripping the wrapper word alone leaves `30 git push …` and the segment reads
+# as "not a git command". The parser skips ahead to the first token that could be the real
+# command word — a bare `git`, or an interpreter whose argument it can parse one level deep.
+_ARG_WRAPPERS = ("env", "command", "sudo", "nohup", "time", "timeout", "xargs")
 _SHELLS = ("bash", "sh", "zsh", "dash", "ksh")
+# A segment that is a `git push` the parser cannot resolve to concrete branch names. It is a
+# TARGET, not a branch: `on_pre_tool_use` denies on it outright. The distinction matters — the
+# obvious "conservative fallback", the current branch, is exactly the value both deny rules
+# treat as permitted (`t != expected` is false when `branch:` frontmatter matches the checked-out
+# branch, which is what /brain sync writes), so returning it was behaviourally an ALLOW.
+UNPARSED = "<unparsed>"
+
+_SEPARATORS = ";|&\n()"
+
+def split_segments(cmd):
+    """Split a Bash command into command segments on UNQUOTED separators.
+
+    `||`/`&&` count as one separator each (not two bare `|`/`&`); `;`, a bare pipe, a bare `&`
+    (backgrounding), a newline — a multi-line body hides a push on its second line otherwise —
+    and `(`/`)`, so a subshell's or a `$(…)`'s body becomes its own segment.
+
+    Quote-aware, which a regex split cannot be: a plain `re.split` cut
+    `git push origin main --push-option="ref (x)"` in half at the paren INSIDE the quoted
+    argument, and the resulting half-segment no longer tokenised — turning a push the guard used
+    to catch into one it could not read.
+    """
+    segs, buf, quote = [], [], ""
+    i, n = 0, len(cmd or "")
+    while i < n:
+        ch = cmd[i]
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                buf.append(cmd[i + 1]); i += 2; continue     # \" inside "…" is a literal quote
+            if ch == quote:
+                quote = ""
+            i += 1; continue
+        if ch == "\\" and i + 1 < n:
+            buf.append(ch); buf.append(cmd[i + 1]); i += 2; continue
+        if ch in "'\"":
+            quote = ch; buf.append(ch); i += 1; continue
+        if cmd.startswith("||", i) or cmd.startswith("&&", i):
+            segs.append("".join(buf)); buf = []; i += 2; continue
+        if ch in _SEPARATORS:
+            segs.append("".join(buf)); buf = []; i += 1; continue
+        buf.append(ch); i += 1
+    segs.append("".join(buf))
+    return segs
 
 def _is_redir(t):
     return bool(_REDIR_RE.match(t)) or t in ("&>", "&>>")
@@ -631,24 +672,35 @@ def _strip_heredocs(cmd):
                 i = j + 1               # skip the body and its terminator
     return "\n".join(out)
 
-def _shell_c_payload(toks):
-    """The string a `bash -c '…'` segment would run, or None when this is not that shape."""
-    if not toks or os.path.basename(toks[0]) not in _SHELLS:
+def _nested_payload(toks):
+    """The command string a segment hands to another interpreter, or None.
+
+    `bash -c '…'` (and `sh -lc '…'`, combined short flags included) and `eval …` both run their
+    argument as a command. `eval`'s arguments are concatenated by the shell, so joining them back
+    is the same string it would run — losing a layer of quoting, which can only cost a false DENY.
+    """
+    if not toks:
         return None
-    for i, t in enumerate(toks[1:], 1):
-        # `-c`, and combined short flags that include it (`bash -lc '…'`).
-        if t.startswith("-") and not t.startswith("--") and "c" in t[1:]:
-            return toks[i + 1] if i + 1 < len(toks) else ""
+    if toks[0] == "eval":
+        return " ".join(toks[1:])
+    if os.path.basename(toks[0]) in _SHELLS:
+        for i, t in enumerate(toks[1:], 1):
+            if t.startswith("-") and not t.startswith("--") and "c" in t[1:]:
+                return toks[i + 1] if i + 1 < len(toks) else ""
     return None
+
+def _is_command_word(t):
+    """Could this token be the command an arg-taking wrapper is about to run?"""
+    return t == "git" or t == "eval" or os.path.basename(t) in _SHELLS
 
 def push_targets(cmd, current_branch, _depth=0):
     """Branch names a Bash command would push to. Parses real `git push` segments only (never
     quoted/echoed text).
 
     Two rules govern every judgement call below: a false DENY costs the user one confirmation,
-    a false ALLOW lets a forbidden push land. So anything this cannot parse but that literally
-    contains `git push` yields the conservative target (the current branch) rather than [] —
-    `on_pre_tool_use` reads an empty list as "not a push at all".
+    a false ALLOW lets a forbidden push land. So a segment that is plainly a `git push` but whose
+    targets cannot be resolved yields `UNPARSED` rather than [] — `on_pre_tool_use` reads an
+    empty list as "not a push at all", and reads `UNPARSED` as "deny and say why".
     """
     targets = []
 
@@ -657,38 +709,40 @@ def push_targets(cmd, current_branch, _depth=0):
             if n and n not in targets:
                 targets.append(n)
 
-    for seg in _SEGMENT_RE.split(_strip_heredocs(cmd)):
+    for seg in split_segments(_strip_heredocs(cmd)):
         try:
             toks = shlex.split(seg.strip(), comments=True)
         except ValueError:
-            # Unbalanced quotes, usually because a separator (`;`, `|`, `(`) inside a quoted
-            # string split the segment mid-quote. Dropping the segment silently is exactly the
-            # false ALLOW this guard exists to prevent.
+            # Unbalanced quotes the segment splitter could not keep together. Dropping the
+            # segment silently is exactly the false ALLOW this guard exists to prevent.
             if _PUSH_RE.search(seg):
-                add([current_branch])
+                add([UNPARSED])
             continue
         opaque = False
         while toks:
             if toks[0] in _WRAPPERS or _ASSIGN_RE.match(toks[0]):
                 toks = toks[1:]; continue
             if toks[0] in _ARG_WRAPPERS:
-                if "git" in toks:
-                    toks = toks[toks.index("git"):]
-                else:
-                    # `timeout 30 bash -c '…'`: the command word is not a bare `git` token and
-                    # the rest is a quoted string this wrapper hands to something else.
+                # Skip the wrapper AND its own arguments (`-u x`, `30`, `-i`) to the first token
+                # that could be the command it runs. Nothing else in the segment can be it, so
+                # a segment with no such token is opaque rather than "not a push".
+                nxt = next((i for i, t in enumerate(toks[1:], 1) if _is_command_word(t)), None)
+                if nxt is None:
                     toks, opaque = [], True
+                else:
+                    toks = toks[nxt:]
+                    continue                    # the new head may be another wrapper
             break
         if opaque:
-            add([current_branch] if _PUSH_RE.search(seg) else [])
+            add([UNPARSED] if _PUSH_RE.search(seg) else [])
             continue
-        payload = _shell_c_payload(toks)
+        payload = _nested_payload(toks)
         if payload is not None:
             # Exactly one level deep: the nested string is parsed as a command in its own right
             # (so `bash -c 'git push origin main'` reports main, not a guess), and anything the
-            # nested parse cannot see through falls back to the conservative target.
+            # nested parse cannot see through is unresolved — never "no push".
             nested = push_targets(payload, current_branch, _depth + 1) if _depth < 1 else []
-            add(nested or ([current_branch] if _PUSH_RE.search(payload) else []))
+            add(nested or ([UNPARSED] if _PUSH_RE.search(payload) else []))
             continue
         if not toks or toks[0] != "git":
             continue
@@ -771,6 +825,11 @@ def on_pre_tool_use(ctx):
         targets = push_targets(cmd, ctx.pre.get("branch", ""))
         if not targets:
             return EMPTY
+        if UNPARSED in targets:
+            # Checked BEFORE the two branch rules, which compare against the expected branch and
+            # would let this through the moment the sentinel happened to look permitted.
+            return _deny("Brain: could not parse the push target — run the push as a plain "
+                         "`git push <remote> <branch>` so the branch rules can be checked.")
         text = vault.read(ctx.context_path); fm, _ = vault.parse_frontmatter(text)
         expected = fm.get("branch", "")
         bad = [t for t in targets if expected and t != expected]
