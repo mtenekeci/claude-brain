@@ -1,6 +1,6 @@
 """CLI subcommands. Plan 2: graph, map. Plan 3 adds init/sync-prepare/sync-finish/status/load/
 config/remove/disconnect/map --annotate."""
-import argparse, glob, json, os, re, shutil, sys, time
+import argparse, json, os, re, shutil, sys, time
 from brain import config, project, vault
 
 
@@ -258,14 +258,27 @@ def _cmd_sync_finish(args):
     return 0
 
 
+def _v1_script_names():
+    """The four script basenames v1 installed. `migrate._LEGACY_MARKERS` is the single source
+    of truth — it is also what `strip_legacy_hooks` matches settings entries against."""
+    from brain import migrate
+    return tuple(m.lstrip("/") for m in migrate._LEGACY_MARKERS)
+
+
 def _orphan_scripts(vault_root, proj):
-    """[(basename, path-that-references-it-or-None), ...] for every `~/.claude/brain-*.sh`
-    orphaned from the old (v1) per-project hook registration. Referenced = the current
-    project's `.claude/settings.json`, or any project-index `path:` column that mentions it."""
-    paths = sorted(glob.glob(os.path.expanduser("~/.claude/brain-*.sh")))
+    """[(basename, path-that-references-it-or-None), ...] for the v1 per-project hook scripts
+    still sitting in `~/.claude/`. Referenced = the user's own `settings.json` (v1 hooks could
+    be registered globally), the current project's `.claude/settings.json`, or any
+    project-index `path:` column that mentions it.
+
+    Deliberately NOT a `~/.claude/brain-*.sh` glob: `--clean-orphans` deletes with no backup
+    and no per-file confirmation, and that namespace belongs to the user too — a
+    `brain-notes.sh` of their own is not ours to remove."""
+    from brain import initproj
+    paths = sorted(p for p in (os.path.expanduser("~/.claude/" + n) for n in _v1_script_names()) if os.path.exists(p))
     if not paths:
         return []
-    settings_paths = [os.path.join(proj.project_dir, ".claude", "settings.json")]
+    settings_paths = [initproj.settings_path(), os.path.join(proj.project_dir, ".claude", "settings.json")]
     idx_text = vault.read(os.path.join(vault_root, "_system", "project-index.md"))
     for line in idx_text.splitlines():
         cells = _index_row_cells(line)

@@ -156,12 +156,38 @@ class ProjectCliTests(unittest.TestCase):
         self.assertIn("stale link", out)
 
     def test_clean_orphans_reports_a_deletion_failure_honestly(self):
-        orphan_dir = os.path.join(self.tmp.name, ".claude", "brain-broken.sh")
+        # A real v1 script name — the previous fixture used `brain-broken.sh`, which is not one,
+        # so the test demonstrated the over-broad glob instead of catching it.
+        orphan_dir = os.path.join(self.tmp.name, ".claude", "brain-session-end.sh")
         os.makedirs(orphan_dir)          # a directory named like a hook script: os.remove() must fail on it
         rc, out = self._run("status", "--clean-orphans")
-        self.assertEqual(rc, 0); self.assertIn("failed:", out); self.assertIn("brain-broken.sh", out)
+        self.assertEqual(rc, 0); self.assertIn("failed:", out); self.assertIn("brain-session-end.sh", out)
         self.assertTrue(os.path.isdir(orphan_dir))
-        self.assertNotIn("removed: brain-broken.sh", out)
+        self.assertNotIn("removed: brain-session-end.sh", out)
+
+    def test_clean_orphans_never_touches_a_script_that_is_not_a_v1_hook(self):
+        """`~/.claude/brain-*.sh` is the user's namespace too. Only the four v1 hook scripts
+        were ever installed by brain, and `--clean-orphans` deletes without a confirmation."""
+        mine = os.path.join(self.tmp.name, ".claude", "brain-notes.sh")
+        os.makedirs(os.path.dirname(mine), exist_ok=True)
+        with open(mine, "w") as f: f.write("#!/bin/sh\necho mine\n")
+        rc, out = self._run("status", "--clean-orphans")
+        self.assertEqual(rc, 0)
+        self.assertTrue(os.path.exists(mine))
+        self.assertNotIn("brain-notes.sh", out)
+
+    def test_clean_orphans_keeps_a_script_registered_in_user_settings(self):
+        """v1 hooks could be registered globally, not per project — a script referenced there
+        is in use, not an orphan."""
+        script = os.path.join(self.tmp.name, ".claude", "brain-precompact.sh")
+        os.makedirs(os.path.dirname(script), exist_ok=True)
+        open(script, "w").close()
+        with open(os.environ["BRAIN_USER_SETTINGS"], "w") as f:
+            f.write(json.dumps({"hooks": {"PreCompact": [{"hooks": [{"type": "command", "command": script}]}]}}))
+        rc, out = self._run("status", "--clean-orphans")
+        self.assertEqual(rc, 0)
+        self.assertIn("kept (referenced): brain-precompact.sh", out)
+        self.assertTrue(os.path.exists(script))
 
     def test_config_set_async_regen_echoes_on_off(self):
         rc, out = self._run("config", "set", "async_regen", "on")
