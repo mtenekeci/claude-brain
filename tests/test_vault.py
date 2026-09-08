@@ -94,3 +94,77 @@ class VaultSweepTests(unittest.TestCase):
         # The flow form still parses, and a bare `key:` with no block stays an empty string.
         fm2, _ = vault.parse_frontmatter("---\naliases: [A, B]\nempty:\nnext: x\n---\n")
         self.assertEqual((fm2["aliases"], fm2["empty"], fm2["next"]), ("[A, B]", "", "x"))
+
+
+class AtomicWriteTests(unittest.TestCase):
+    """`vault.atomic_write` is the single writer behind vault.write and every codemap write."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "sub", "context.md")
+
+    def _strays(self):
+        d = os.path.dirname(self.path)
+        return [f for f in os.listdir(d) if f != os.path.basename(self.path)] if os.path.isdir(d) else []
+
+    def test_temp_name_is_unique_per_call(self):
+        """`path + '.tmp'` was shared by every writer of the same file; mkstemp is not."""
+        seen = []
+        real = os.replace
+        def spy(src, dst):
+            seen.append(src); real(src, dst)
+        os.replace = spy
+        try:
+            vault.atomic_write(self.path, "one\n")
+            vault.atomic_write(self.path, "two\n")
+        finally:
+            os.replace = real
+        self.assertEqual(len(set(seen)), 2, seen)
+        for src in seen:
+            base = os.path.basename(src)
+            self.assertTrue(base.startswith("context.md.") and base.endswith(".tmp"), base)
+            self.assertEqual(os.path.dirname(src), os.path.dirname(self.path))   # same filesystem
+        self.assertEqual(vault.read(self.path), "two\n")
+        self.assertEqual(self._strays(), [])
+
+    def test_interleaved_writers_both_succeed_and_leave_no_temp(self):
+        """Deterministic stand-in for two processes: the inner write runs while the outer
+        writer's temp file exists and is about to be replaced into place."""
+        vault.atomic_write(self.path, "seed\n")
+        real = os.replace
+        inner_done = []
+        def spy(src, dst):
+            if not inner_done:
+                inner_done.append(True)
+                vault.atomic_write(self.path, "inner\n")     # a second writer, mid-flight
+                self.assertTrue(os.path.exists(src), "the outer writer's temp was unlinked")
+            real(src, dst)
+        os.replace = spy
+        try:
+            vault.atomic_write(self.path, "outer\n")
+        finally:
+            os.replace = real
+        self.assertEqual(vault.read(self.path), "outer\n")   # last replace wins, never a merge
+        self.assertEqual(self._strays(), [])
+
+    def test_mode_is_preserved_on_rewrite_and_defaulted_on_create(self):
+        """mkstemp creates 0600; a rewrite must not quietly tighten an existing note."""
+        import stat as _stat
+        vault.atomic_write(self.path, "a\n")
+        self.assertEqual(_stat.S_IMODE(os.stat(self.path).st_mode), vault.NEW_FILE_MODE)
+        os.chmod(self.path, 0o664)
+        vault.atomic_write(self.path, "b\n")
+        self.assertEqual(_stat.S_IMODE(os.stat(self.path).st_mode), 0o664)
+
+    def test_failure_removes_the_temp_and_reraises(self):
+        vault.atomic_write(self.path, "keep\n")
+        real = os.replace
+        os.replace = lambda src, dst: (_ for _ in ()).throw(OSError("nope"))
+        try:
+            with self.assertRaises(OSError):
+                vault.atomic_write(self.path, "lost\n")
+        finally:
+            os.replace = real
+        self.assertEqual(vault.read(self.path), "keep\n")
+        self.assertEqual(self._strays(), [])

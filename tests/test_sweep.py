@@ -140,9 +140,9 @@ class RenderTruncationTests(unittest.TestCase):
 
     def test_every_section_of_a_full_report_stays_under_the_overall_cap(self):
         """Each section caps itself, so RENDER_LINE_LIMIT is a backstop, not the working limit."""
-        res = {"projects": ["demo"], "auto_applied": ["x"], "auto_pending": 2,
-               "candidates": [{"slug": "c%d" % i, "name": "C", "evidence": "e"} for i in range(50)],
-               "stale": ["s"], "duplicates": [("a%d" % i, "b%d" % i) for i in range(5)],
+        res = {"projects": ["demo"], "auto_applied": [["demo", "x"]], "auto_pending": 2,
+               "candidates": [{"project": "demo", "slug": "c%d" % i, "name": "C", "evidence": "e"} for i in range(50)],
+               "stale": [["demo", "s"]], "duplicates": [("a%d" % i, "b%d" % i) for i in range(5)],
                "dangling": [("project:demo", "m%d" % i) for i in range(200)]}
         out = lint.render(res)
         lines = out.rstrip("\n").split("\n")
@@ -152,7 +152,7 @@ class RenderTruncationTests(unittest.TestCase):
 
 
 class LintAllProjectsTests(VaultBackedTests):
-    def test_entries_are_slug_labelled_and_dangling_is_deduped(self):
+    def test_entries_carry_their_project_and_dangling_is_deduped(self):
         # A second project that dangles the SAME module id as the first.
         for slug in ("demo", "other"):
             pdir = os.path.join(self.vault, "projects", slug)
@@ -170,15 +170,23 @@ class LintAllProjectsTests(VaultBackedTests):
         self.assertEqual(res["dangling"], list(dict.fromkeys(res["dangling"])))   # deduped
         self.assertEqual([d for d in res["dangling"] if d[0] == "module:shared"],
                          [("module:shared", "concepts/ghost")])
-        for entry in res["stale"] + [c["slug"] for c in res["candidates"]] + res["auto_applied"]:
-            self.assertRegex(entry, r"^(demo|other): ")
+        # The DATA keeps bare slugs — `graph dismiss <slug>` is fed straight from here, and a
+        # "other: foo" value is not a slug any more.
+        for project, value in res["stale"] + res["auto_applied"]:
+            self.assertIn(project, ("demo", "other")); self.assertNotIn(":", value)
+        for c in res["candidates"]:
+            self.assertIn(c["project"], ("demo", "other")); self.assertNotIn(":", c["slug"])
+        # The PREFIX is applied by render, and only across projects.
+        out = lint.render(res)
+        self.assertRegex(out, r"(demo|other): ")
 
     def test_single_project_entries_are_not_labelled(self):
         g = graph.load(self.vault, "demo", self.repo, force=True)
         res = lint.run(self.vault, "demo", self.repo, g)
         self.assertEqual(res["projects"], ["demo"])
-        for entry in res["stale"] + [c["slug"] for c in res["candidates"]] + res["auto_applied"]:
-            self.assertNotIn(": ", entry)
+        # Single project: nothing is prefixed, because every line would carry the same slug.
+        for line in lint.render(res).splitlines()[1:]:
+            self.assertNotIn("demo: ", line)
 
     def test_result_is_plain_data_with_no_live_graph_handle(self):
         import json as _json

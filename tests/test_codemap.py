@@ -268,5 +268,10 @@ class CodemapRenderTests(unittest.TestCase):
             self.assertTrue(codemap.ensure(self.repo, self.pdir))
         finally:
             os.replace = real_replace
-        codemap_calls = [c for c in calls if c[0].endswith("codemap.md.tmp")]
+        # The temp name is unique per call now (tempfile.mkstemp), so match the shape:
+        # "<dir>/codemap.md.<random>.tmp" replaced onto "<dir>/codemap.md".
+        codemap_calls = [c for c in calls if os.path.basename(c[1]) == "codemap.md"]
         self.assertEqual(len(codemap_calls), 1)
+        src, dst = codemap_calls[0]
+        self.assertTrue(os.path.basename(src).startswith("codemap.md.") and src.endswith(".tmp"), src)
+        self.assertEqual(os.path.dirname(src), os.path.dirname(dst))   # same filesystem

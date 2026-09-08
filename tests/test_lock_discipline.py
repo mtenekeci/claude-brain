@@ -92,6 +92,14 @@ class LockDisciplineTests(unittest.TestCase):
         calls = []
         orig_lf = codemap.list_files
         codemap.list_files = lambda d: ["src/f%04d.ts" % i for i in range(3000)]
+        # Blank the generated block back to the stub `ensure_stub` would have written. setUp's
+        # `codemap.ensure` left a CURRENT map behind, and SessionStart correctly declines to
+        # re-spawn for a map that is already fresh — so without this the large-repo spawn this
+        # test exists to observe would never fire.
+        cm = os.path.join(self.pdir, "codemap.md")
+        with open(cm, encoding="utf-8") as f: _, _, curated = codemap.split_codemap(f.read())
+        with open(cm, "w", encoding="utf-8") as f:
+            f.write(codemap.gen_start("") + "\n" + codemap.GEN_END + "\n\n" + curated)
         orig_popen = stub_popen(calls)
         restore = self._instrument()
         try:

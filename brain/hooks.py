@@ -134,6 +134,23 @@ def _spawn_regen_process(project_dir, force=False):
         return False
     return True
 
+def _finish_regen_spawn(session_id, project_dir, key):
+    """Run the detached build outside the lock, then release the claim if it never started.
+
+    The claim is recorded optimistically under the main lock (two SessionStarts must not both
+    spawn), which on its own would remember a failed Popen as a spawn — and then `compact` and
+    `resume` would never retry. Re-opening the lock for two field writes is cheap; the Popen
+    itself has already happened by then, so nothing heavy runs inside it."""
+    if _spawn_regen_process(project_dir, force=True):
+        return
+    try:
+        with state.locked(session_id) as s:
+            if s.regen_spawned_for == key:      # only undo OUR claim, never a newer one
+                s.regen_spawned_for = ""
+                s.last_regen_spawn_at = 0.0
+    except Exception as e:
+        config.log_error("could not release regen claim: %r" % e)
+
 def _claim_regen_slot(ctx, enabled):
     """Rate limit, under the lock: True at most once a minute per session, and only when
     background regeneration is enabled. Records the claim so a peer event cannot re-spawn;
@@ -179,8 +196,20 @@ def _prepare_session_start(ctx):
             if config.async_regen():
                 # The Popen itself is decided under the lock (on_session_start) and performed
                 # after it, so `compact`/`resume` in the same session cannot each spawn one.
-                pre["want_regen"] = True
                 pre["regen_key"] = codemap.freshness_key(ctx.project.project_dir, files)
+                # "Large" is a size test, not a freshness test. A detached regen from an earlier
+                # SessionStart in this same session may already have filled the map in, and a
+                # compact/resume afterwards must neither re-spawn nor claim the map is deferred.
+                #
+                # The signal is codemap.md's own generated block, NOT .brain/codelayer.json: the
+                # layer's sha is a git fingerprint that does not move when ensure_stub writes an
+                # empty block, so a stale stub sitting next to a current layer would read as
+                # fresh. The stub's marker carries `sha=` blank and no tree; a real regen writes
+                # both. Read pre-lock, like everything else here.
+                stored_sha, generated, _ = codemap.split_codemap(
+                    vault.read(os.path.join(ctx.pdir, "codemap.md")))
+                pre["map_fresh"] = bool(generated.strip()) and stored_sha == pre["regen_key"]
+                pre["want_regen"] = not pre["map_fresh"]
             else:
                 # No background process will ever fill the stub in, so the foreground build is
                 # the only path left — an empty code map all session is the worse trade.
@@ -229,19 +258,23 @@ def on_session_start(ctx):
     if not ctx.state.last_head_sha:
         ctx.state.last_head_sha = ctx.pre.get("head_sha", "")
     # Stale unless the refresh actually ran to completion: an exception in prepare left the
-    # code map untouched, which is exactly the case a "fresh" flag would hide.
-    deferred = bool(ctx.pre.get("large")) and not ctx.pre.get("built_sync")
+    # code map untouched, which is exactly the case a "fresh" flag would hide. A large repo
+    # whose code map is already current is NOT deferred — nothing is missing from it.
+    deferred = (bool(ctx.pre.get("large")) and not ctx.pre.get("built_sync")
+                and not ctx.pre.get("map_fresh"))
     ctx.state.codemap_stale = deferred or not ctx.pre.get("refreshed")
     after_lock = None
     if ctx.pre.get("want_regen"):
         key = ctx.pre.get("regen_key", "")
         # Once per session-state lifetime unless the tree moved: `compact` and `resume` re-fire
-        # SessionStart against the same state file and would otherwise each spawn a build.
+        # SessionStart against the same state file and would otherwise each spawn a build. The
+        # claim is taken here, optimistically, so two events cannot both spawn;
+        # _finish_regen_spawn releases it again if the Popen turns out to have failed.
         if ctx.state.regen_spawned_for != key:
             ctx.state.regen_spawned_for = key
             ctx.state.last_regen_spawn_at = time.time()
-            project_dir = ctx.project.project_dir
-            after_lock = lambda: _spawn_regen_process(project_dir, force=True)
+            project_dir, session_id = ctx.project.project_dir, ctx.session_id
+            after_lock = lambda: _finish_regen_spawn(session_id, project_dir, key)
     parts = [_protocol(ctx).rstrip("\n"), ""]
     context_text = vault.read(ctx.context_path)
     if not context_text:

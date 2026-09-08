@@ -2,7 +2,7 @@
 Deterministic; never touches the curated block of codemap.md (rendering lives in part 2)."""
 import json, os, re, subprocess, time
 
-from brain import config
+from brain import config, vault
 
 SOURCE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".rb", ".java", ".kt", ".swift",
                ".vue", ".svelte", ".c", ".cpp", ".cs", ".php", ".scala", ".m", ".mm", ".h")
@@ -225,22 +225,12 @@ def _brain_dir(pdir):
     os.makedirs(d, exist_ok=True)
     return d
 
-def _discard(tmp):
-    """Best-effort removal of a scratch file; never raises (it runs in a `finally`)."""
-    try:
-        os.remove(tmp)
-    except OSError:
-        pass
-
 def write_layer(pdir, layer):
-    path = os.path.join(_brain_dir(pdir), "codelayer.json")
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(layer, f, indent=1, sort_keys=True)
-        os.replace(tmp, path)
-    finally:
-        _discard(tmp)
+    # vault.atomic_write, not a local tmp+replace: the code layer is written by the SessionStart
+    # hook and by a detached `map --regen` that can be running at the same moment, so the temp
+    # name has to be unique per writer. See its docstring for what atomicity does not cover.
+    vault.atomic_write(os.path.join(_brain_dir(pdir), "codelayer.json"),
+                       json.dumps(layer, indent=1, sort_keys=True))
 
 def read_layer(pdir):
     try:
@@ -334,13 +324,7 @@ def _codemap_path(pdir):
     return os.path.join(pdir, "codemap.md")
 
 def _write_codemap(path, text):
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    finally:
-        _discard(tmp)           # a failed replace must not leave codemap.md.tmp in the vault
+    vault.atomic_write(path, text)
 
 def ensure(project_dir, pdir, files=None):
     path = _codemap_path(pdir)
@@ -413,7 +397,6 @@ def _split_cells(line):
     return cells, depth == 0
 
 def _table_rows(curated, heading, ncols):
-    from brain import vault
     body = vault.get_section(curated, heading)
     rows = []
     for line in body.splitlines():

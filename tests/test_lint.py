@@ -37,15 +37,15 @@ class LintTests(unittest.TestCase):
 
     def test_run_classifies_and_auto_applies(self):
         res = lint.run(self.vault, "demo", self.repo, self.g)
-        self.assertEqual(sorted(res["auto_applied"]), ["jest", "nextauth"])
+        self.assertEqual(sorted(res["auto_applied"]), [["demo", "jest"], ["demo", "nextauth"]])
         ctx = vault.read(os.path.join(self.pdir, "context.md")); arch_sec = vault.get_section(ctx, "Architecture")
         self.assertIn("uses:: [[concepts/jest|Jest]]", arch_sec)                      # no typed link anywhere → link added
         self.assertNotIn("uses:: [[concepts/nextauth|NextAuth]]", arch_sec)           # section already links it → no context.md line
         self.assertIn("[[projects/demo/context|demo]]", vault.read(os.path.join(self.vault, "concepts", "nextauth.md")))   # Used-by completed
         self.assertIn("[[projects/demo/context|demo]]", vault.read(os.path.join(self.vault, "concepts", "jest.md")))
-        self.assertNotIn("postgresql", res["auto_applied"])                          # typed + Used-by already present
+        self.assertNotIn("postgresql", [x for _, x in res["auto_applied"]])          # typed + Used-by already present
         self.assertEqual([c["slug"] for c in res["candidates"]], ["redis"])           # prose mention only
-        self.assertEqual(res["stale"], ["kafka"])
+        self.assertEqual(res["stale"], [["demo", "kafka"]])
         self.assertEqual(res["dangling"], [("project:demo", "concepts/missing-one")])
         res2 = lint.run(self.vault, "demo", self.repo, graph.load(self.vault, "demo", self.repo, force=True))
         self.assertEqual(res2["auto_applied"], [])                            # idempotent
@@ -89,8 +89,8 @@ class LintTests(unittest.TestCase):
     def test_dismissed_concept_is_not_auto_applied(self):
         lint.dismiss(self.pdir, "jest")
         res = lint.run(self.vault, "demo", self.repo, self.g)
-        self.assertNotIn("jest", res["auto_applied"])
-        self.assertEqual(res["auto_applied"], ["nextauth"])               # other deps still applied
+        self.assertNotIn("jest", [x for _, x in res["auto_applied"]])
+        self.assertEqual(res["auto_applied"], [["demo", "nextauth"]])     # other deps still applied
         ctx = vault.read(os.path.join(self.pdir, "context.md"))
         self.assertNotIn("concepts/jest", ctx)                            # no uses:: line
         self.assertNotIn("projects/demo/context", vault.get_section(      # shared note left alone

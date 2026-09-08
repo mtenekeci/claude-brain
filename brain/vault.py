@@ -1,5 +1,5 @@
 """Pure text helpers for vault markdown. Keep them regex-simple and format-preserving."""
-import os, re
+import os, re, stat, tempfile
 from collections import OrderedDict
 
 _FM_RE = re.compile(r"\A---\n(.*?)\n---\n", re.S)
@@ -14,6 +14,13 @@ def parse_frontmatter(text):
 
     Those indented `- item` continuation lines are folded into the flow form `[Postgres, pg]`
     so downstream `graph.parse_aliases` sees one shape regardless of how the note was authored.
+
+    Known ambiguity: the fold joins on ", " and `parse_aliases` splits on ",", so a block item
+    that itself contains a comma round-trips as two aliases — `- Postgres, the DB` becomes
+    `Postgres` and `the DB`. Accepted rather than escaped: an alias is a lookup key, so the
+    worst case is one extra harmless key, and quoting rules that survive both directions would
+    cost more than the ambiguity does. Do not reuse this fold for a field where an item's exact
+    text matters.
     """
     m = _FM_RE.match(text)
     fm = OrderedDict()
@@ -136,24 +143,54 @@ def read(path):
         return ""
 
 def _discard(tmp):
-    """Best-effort removal of a scratch file. Never raises: it runs in a `finally`, where a
+    """Best-effort removal of a scratch file. Never raises: it runs on a failure path, where a
     second exception would mask the write failure the caller actually needs to see."""
     try:
         os.remove(tmp)
     except OSError:
         pass
 
-def write(path, text):
-    """Atomic tmp+replace. Hooks rewrite context.md from inside a session that Claude Code can
-    kill at any moment; a truncated context.md is worse than a stale one."""
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = path + ".tmp"
+NEW_FILE_MODE = 0o644
+
+def atomic_write(path, text):
+    """Write `text` to `path` via a temp file in the same directory, then `os.replace`.
+
+    Hooks rewrite context.md from inside a session Claude Code can kill at any moment, so a
+    reader must never see a half-written note: `os.replace` is atomic within a filesystem, and
+    the temp file is created in the target's own directory to guarantee that.
+
+    The temp name comes from `tempfile.mkstemp`, NOT `path + ".tmp"`. Two brain processes can
+    write the same file concurrently — two sessions in one project, or `graph lint
+    --all-projects` touching a shared concept note — and a shared temp name lets one process
+    unlink the other's in-flight file or publish a half-written one. The name is removed only
+    on the failure path; a successful replace has already consumed it.
+
+    What "atomic" does NOT buy you: `os.replace` puts a *fresh regular file* at `path`, so
+    ownership, extended attributes and hard links to the old inode are not carried over, and a
+    symlink at `path` is replaced rather than written through. Permission bits ARE carried over
+    when the file already exists (mkstemp would otherwise tighten every note to 0600); a new
+    file gets NEW_FILE_MODE. Do not reuse this for a path someone deliberately symlinked or
+    hard-linked.
+    """
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + ".", suffix=".tmp")
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:     # fdopen owns fd and closes it
             f.write(text)
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)      # rewrite: keep the note's own bits
+        except OSError:
+            mode = NEW_FILE_MODE                            # brand-new file
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
-    finally:
-        _discard(tmp)           # replace failed — never leave a stray .tmp in the vault
+    except BaseException:
+        _discard(tmp)
+        raise
+
+def write(path, text):
+    """The vault-facing name for `atomic_write` — every call site that writes a note uses it."""
+    return atomic_write(path, text)
 
 def append(path, text):
     with open(path, "a", encoding="utf-8") as f:

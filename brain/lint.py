@@ -154,13 +154,14 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
     demand from the graph the caller already holds; the result dict stays plain JSON-safe data
     so it can be printed, logged or serialised without a live Graph object riding along.
 
-    Across projects (`all_projects`) every reported entry is prefixed `<slug>: ` — otherwise a
-    bare concept slug in the report names no project the reader can go and fix.
+    Every entry carries the project it came from as its own field; `render` is what turns that
+    into the `<slug>: ` prefix, and only when the report covers more than one project. The
+    stored slug stays bare on purpose — it is the argument the user pastes into
+    `graph dismiss <slug>`, and a prefixed one is not a slug any more.
     """
     slugs = _project_slugs(vault_root) if all_projects else [slug]
     if slug not in slugs:
         slugs = [slug] + slugs
-    label = (lambda s_, x: "%s: %s" % (s_, x)) if len(slugs) > 1 else (lambda s_, x: x)
     result = {"auto_applied": [], "auto_pending": 0, "candidates": [], "stale": [], "dangling": [],
               "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs}
     for s in slugs:
@@ -188,18 +189,18 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
                 config.log_error("lint: could not auto-link %s in %s: %r" % (cid, s, e))
                 wrote = False
             if wrote:
-                result["auto_applied"].append(label(s, cid.split(":", 1)[1]))
+                result["auto_applied"].append([s, cid.split(":", 1)[1]])
             typed.add(cid)                          # written or already there: the link now exists
         mentioned = {e.dst for e in gg.edges if e.src == pid and e.type == "mentions"}
         for cid in sorted(mentioned - typed - dep_concepts):
             cslug = cid.split(":", 1)[1]
             if cslug not in dismissed:
-                result["candidates"].append({"slug": label(s, cslug), "name": gg.nodes[cid].name,
+                result["candidates"].append({"project": s, "slug": cslug, "name": gg.nodes[cid].name,
                                              "evidence": "mentioned in prose, no typed link"})
         # `used-by` edges are provenance from the concept note's own ## Used by claim.
         claimed = {e.dst for e in gg.edges if e.src == pid and e.type == "used-by"}
         for cid in sorted(claimed - typed - mentioned - dep_concepts):
-            result["stale"].append(label(s, cid.split(":", 1)[1]))
+            result["stale"].append([s, cid.split(":", 1)[1]])
         owned_prefixes = ("project:%s" % s, "section:%s/" % s, "module:", "decision:", "question:")
         # `module:`/`decision:`/`question:` ids are not slug-scoped, so two projects that both
         # contain a `module:api` report the same dangling pair — dedupe, keeping first-seen order.
@@ -230,21 +231,32 @@ def health_line(res):
         parts.append("%d pending" % p)
     return "Brain: graph health — " + ", ".join(parts) + " (run /brain sync)"
 
+def _labeller(res):
+    """`(project, value) -> display string`. Prefixes `<project>: ` only when the report spans
+    more than one project — a single-project report would just repeat the same slug on every
+    line. Labelling lives here so `run()`'s data keeps bare, dismissable slugs."""
+    if len(res.get("projects") or []) > 1:
+        return lambda project, value: "%s: %s" % (project, value)
+    return lambda project, value: value
+
 def render(res, g=None):
     """`g` is only needed for the on-demand duplicate scan `run()` deliberately skipped."""
+    label = _labeller(res)
     lines = ["lint: projects %s" % ", ".join(res.get("projects") or [])]
     if res.get("auto_applied"):
         pending = res.get("auto_pending") or 0
-        lines.append("auto-linked (manifest deps): " + ", ".join(res["auto_applied"])
+        lines.append("auto-linked (manifest deps): " + ", ".join(label(p, x) for p, x in res["auto_applied"])
                      + (" (+%d deferred to the next run)" % pending if pending else ""))
     c = res.get("candidates") or []
     if c:
         lines.append("candidates (confirm with a typed link, or dismiss):")
-        lines += ["  - %s — %s (%s)" % (x["slug"], x["name"], x["evidence"]) for x in c[:CANDIDATE_LIMIT]]
+        lines += ["  - %s — %s (%s)" % (label(x.get("project", ""), x["slug"]), x["name"], x["evidence"])
+                  for x in c[:CANDIDATE_LIMIT]]
         if len(c) > CANDIDATE_LIMIT:
             lines.append("  … and %d more" % (len(c) - CANDIDATE_LIMIT))
     if res.get("stale"):
-        lines.append("stale Used-by (concept claims this project, no reference found): " + ", ".join(res["stale"]))
+        lines.append("stale Used-by (concept claims this project, no reference found): "
+                     + ", ".join(label(p, x) for p, x in res["stale"]))
     dang = res.get("dangling") or []
     if dang:
         lines.append("dangling links:")

@@ -241,3 +241,50 @@ class LargeRepoDeferralTests(unittest.TestCase):
         finally:
             hooks.codemap.ensure = orig
         self.assertTrue(state.SessionState.load("s1").codemap_stale)
+
+    def test_a_fresh_code_map_is_not_reported_as_deferred(self):
+        """`large` is a size test. Once the detached build has filled codemap.md in, a later
+        compact/resume must neither claim the map is deferred nor re-spawn a build."""
+        # First SessionStart: stub written, one build spawned.
+        outs, calls = self._session_starts("startup")
+        self.assertIn("code map deferred", outs[0])
+        self.assertEqual(len(calls), 1)
+        # Simulate that detached build completing: a real generated block stamped with the
+        # current freshness key.
+        key = hooks.codemap.freshness_key(self.repo, hooks.codemap.list_files(self.repo))
+        cm = os.path.join(self.pdir, "codemap.md")
+        _, _, curated = hooks.codemap.split_codemap(read_text(cm))
+        with open(cm, "w", encoding="utf-8") as f:
+            f.write(hooks.codemap.gen_start(key) + "\nsrc/f0000.ts\n" + hooks.codemap.GEN_END + "\n\n" + curated)
+        # A fresh session id, so the spawn claim from the first run cannot be what suppresses it.
+        r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo, session_id="s2", source="resume"))
+        self.assertNotIn("code map deferred", r.stdout)
+        self.assertFalse(state.SessionState.load("s2").codemap_stale)
+        calls2 = []
+        orig = stub_popen(calls2)
+        try:
+            hooks.dispatch("SessionStart", payload("SessionStart", self.repo, session_id="s3", source="resume"))
+        finally:
+            hooks.subprocess.Popen = orig
+        self.assertEqual(calls2, [], "a current code map must not be force-rebuilt")
+
+    def test_a_failed_spawn_is_not_remembered_as_one(self):
+        """The claim is optimistic, so a Popen that never started has to release it — otherwise
+        compact/resume see `regen_spawned_for` set and never retry the build."""
+        def exploding(*a, **k):
+            if a and "--regen" in list(a[0]):
+                raise OSError("no fork for you")
+            return orig(*a, **k)
+        orig = hooks.subprocess.Popen
+        hooks.subprocess.Popen = exploding
+        try:
+            r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        finally:
+            hooks.subprocess.Popen = orig
+        self.assertIn("code map deferred", r.stdout)          # the event itself still succeeds
+        s = state.SessionState.load("s1")
+        self.assertEqual(s.regen_spawned_for, "")
+        self.assertEqual(s.last_regen_spawn_at, 0.0)
+        # ...and the next SessionStart therefore does try again.
+        _, calls = self._session_starts("resume")
+        self.assertEqual(len(calls), 1)
