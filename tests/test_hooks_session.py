@@ -1,6 +1,6 @@
 import json, os, tempfile, unittest
 from tests.helpers import make_vault, make_project, write_config, payload, make_graph_vault, make_source_tree, stub_popen, read_text
-from brain import hooks, state
+from brain import hooks, state, vault
 
 class SessionStartTests(unittest.TestCase):
     def setUp(self):
@@ -32,6 +32,23 @@ class SessionStartTests(unittest.TestCase):
     def test_compact_adds_branch_line(self):
         r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo, source="compact"))
         self.assertIn("Brain: context re-injected after compact; branch is main", r.stdout)
+        self.assertNotIn("(expected:", r.stdout)          # fixture context.md declares no branch
+
+    def test_compact_nudges_when_last_entry_is_a_placeholder_checkpoint(self):
+        """No model turn runs between the PreCompact hook and the compaction, so the checkpoint's
+        placeholder lines can only be filled in on the first post-compact turn — SessionStart
+        `compact` is that turn and must say so. A real last entry gets no nudge."""
+        log = os.path.join(self.vault, "projects", "demo", "log.md")
+        r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo, source="compact"))
+        self.assertNotIn("placeholder Completed/Decided", r.stdout)
+        with open(log, "a") as f:
+            f.write(vault.format_log_entry("2026-01-02", 2, "—", "a.py", "none", "—", tag="pre-compact"))
+        r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo, session_id="s2", source="compact"))
+        self.assertIn("Session 2 (pre-compact)", r.stdout)
+        self.assertIn("placeholder Completed/Decided", r.stdout)
+        self.assertIn("## State and ## Active Work in " + os.path.join(self.vault, "projects", "demo", "context.md"), r.stdout)
+        r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo, session_id="s3", source="startup"))
+        self.assertNotIn("placeholder Completed/Decided", r.stdout)   # a fresh session cannot recall the detail
 
     def test_silent_outside_brain_project(self):
         with tempfile.TemporaryDirectory() as other:

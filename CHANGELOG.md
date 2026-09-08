@@ -4,6 +4,18 @@ All notable changes to claude-brain are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.0.1
+
+### Fixed
+
+- `PreCompact`: the checkpoint message asked for the entry to be enriched "before the compact
+  proceeds", which no model turn can do — Claude Code compacts immediately after the hook.
+  The message now says to enrich after compaction, and SessionStart (`compact`/`resume`)
+  nudges Claude when the last `log.md` entry is still a `(pre-compact)`/`(auto-close)`
+  checkpoint with placeholder Completed/Decided lines — the first turn that can act on it.
+- SessionStart no longer prints `(expected: unset)` after compaction when `context.md`
+  declares no branch.
+
 ## 2.0.0
 
 A rewrite of the runtime. v1 was a markdown behavioural spec plus four bash hook scripts
