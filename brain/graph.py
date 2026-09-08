@@ -240,6 +240,25 @@ def mention_edges(g, texts, project_slug):
             if re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(term), prose, re.I):
                 g.add_edge(src, n.id, "mentions"); break
 
+SUMMARY_MAX = 120
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s")
+
+def first_sentence(note_text, limit=SUMMARY_MAX):
+    """First sentence of a note's prose, capped — what a hit line shows so a concept is
+    useful without a Read. Skips frontmatter, headings, blank lines, typed-link lines and
+    `## Used by` provenance; strips wikilink syntax and inline code marks."""
+    _, body = vt.parse_frontmatter(note_text)
+    body = vt.replace_section(body, "Used by", "")
+    for line in strip_fences(body).splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or s.startswith("- ") or re.match(r"^[\w-]+::", s):
+            continue
+        s = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", s)
+        s = re.sub(r"\[\[([^\]]+)\]\]", r"\1", s).replace("`", "")
+        s = _SENTENCE_END_RE.split(s, 1)[0].strip()
+        return s if len(s) <= limit else s[:limit - 1].rstrip() + "…"
+    return ""
+
 def build_vault_layer(g, vault_root, slug):
     pdir = os.path.join(vault_root, "projects", slug)
     ctx_path, arch_path = os.path.join(pdir, "context.md"), os.path.join(pdir, "architecture.md")
@@ -256,7 +275,8 @@ def build_vault_layer(g, vault_root, slug):
         text = vt.read(os.path.join(cdir, f)); cfm, _ = vt.parse_frontmatter(text)
         cslug = slugify(f[:-3])
         g.add_node(Node(node_id("concept", cslug), "concept", cfm.get("concept") or cslug, path=os.path.join(cdir, f),
-                        aliases=parse_aliases(cfm.get("aliases", "")), meta={"ctype": cfm.get("type", "")}))
+                        aliases=parse_aliases(cfm.get("aliases", "")),
+                        meta={"ctype": cfm.get("type", ""), "summary": first_sentence(text)}))
     for f in concept_files:
         cid = node_id("concept", slugify(f[:-3])); text = vt.read(os.path.join(cdir, f))
         for w in WIKILINK_RE.finditer(vt.get_section(text, "Used by")):
@@ -428,7 +448,13 @@ def _haystack(n):
     if n.type == "symbol":
         return [(n.name or "").lower(), ident.split("#", 1)[-1]] + [a.lower() for a in n.aliases], []
     base = os.path.basename(n.path or "")
-    weak = [base.lower(), os.path.splitext(base)[0].lower(), (n.path or "").lower()]
+    weak = [base.lower(), os.path.splitext(base)[0].lower()]
+    # Only code nodes carry a repo-relative path worth substring-matching (`src/auth`). A vault
+    # note's path is absolute, so matching it made "concepts", "projects" and every directory
+    # of the vault root a hit on every note — and the degree boost then surfaced the
+    # vault-wide hubs (docker, postgresql) for prompts that never mentioned them.
+    if n.type in ("file", "module"):
+        weak.append((n.path or "").lower())
     return [(n.name or "").lower(), ident] + [a.lower() for a in n.aliases] + weak[:2], weak
 
 def _score(n, term):
@@ -475,10 +501,35 @@ def path(g, a, b):
         out.append(cur); cur = prev[cur]
     return list(reversed(out))
 
-def top(g, n=TOP_LIMIT, exclude=("file", "symbol")):
+TOP_REACH = 2   # hops from the anchor that still count as "this project's" neighbourhood
+# A `mentions` edge is a lint candidate, not a relationship: context.md naming docker in a
+# sentence must not make docker "this project's" node. Reach follows every other edge type.
+_REACH_SKIP = ("mentions",)
+
+def _reach(g, start, depth):
+    seen, frontier = {start}, [start]
+    for _ in range(depth):
+        nxt = []
+        for cur in frontier:
+            for other, etype, _d in g.edges_of(cur):
+                if etype not in _REACH_SKIP and other not in seen:
+                    seen.add(other); nxt.append(other)
+        frontier = nxt
+    return seen
+
+def top(g, n=TOP_LIMIT, exclude=("file", "symbol"), near=None):
+    """Most-connected nodes. With `near` (a node id, normally `project:<slug>`) the project's
+    own neighbourhood — anchor plus everything within TOP_REACH hops — ranks first, and the
+    vault-wide ranking only fills whatever room is left. Degree stays vault-wide (a concept
+    seven projects use IS more connected); scoping decides who competes, not how they score.
+    An unknown anchor degrades to the global list."""
     nodes = [x for x in g.nodes.values() if x.type not in exclude and not x.meta.get("external")]
     nodes.sort(key=lambda x: (-g.degree(x.id), x.id))
-    return nodes[:n]
+    if not near or near not in g.nodes:
+        return nodes[:n]
+    reach = _reach(g, near, TOP_REACH)
+    own = [x for x in nodes if x.id in reach]
+    return (own + [x for x in nodes if x.id not in reach])[:n]
 
 # ---------------------------------------------------------------- renderers
 
@@ -503,7 +554,10 @@ def _short_path(g, n):
     return p if rel.startswith("..") else rel
 
 def _line(g, n):
-    return "%s %s  %s  — %s" % (n.type, n.id.split(":", 1)[1], _short_path(g, n), n.name)
+    line = "%s %s  %s  — %s" % (n.type, n.id.split(":", 1)[1], _short_path(g, n), n.name)
+    if n.type == "concept" and n.meta.get("summary"):
+        line += " · " + n.meta["summary"]
+    return line
 
 def render_find(g, nodes, limit=FIND_LIMIT):
     return "".join(_line(g, n) + "\n" for n in nodes[:limit])

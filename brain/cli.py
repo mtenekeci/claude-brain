@@ -90,7 +90,7 @@ def _graph(args):
     if args.cmd == "path":
         sys.stdout.write(graph.render_path(g, graph.path(g, args.a, args.b)) or "no path\n"); return 0
     if args.cmd == "top":
-        sys.stdout.write(graph.render_top(g, graph.top(g, n=args.n)) or "graph is empty\n"); return 0
+        sys.stdout.write(graph.render_top(g, graph.top(g, n=args.n, near=graph.node_id("project", proj.slug))) or "graph is empty\n"); return 0
     if args.cmd == "lint":
         try:
             from brain import lint

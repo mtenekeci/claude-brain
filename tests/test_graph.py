@@ -245,6 +245,45 @@ class CodeLayerAndQueryTests(unittest.TestCase):
         top = graph.top(self.g, n=5)
         self.assertEqual(top[0].id, "project:demo"); self.assertTrue(all(x.type not in ("file", "symbol") for x in top)); self.assertLessEqual(len(top), 5)
 
+    def test_top_scoped_to_a_project_prefers_its_own_neighbourhood(self):
+        """SessionStart's hub list is per project: a concept that is a vault-wide hub because
+        seven OTHER projects use it must not crowd out this project's own sections/concepts.
+        Global hubs only fill the tail when the project's neighbourhood is too small."""
+        g = graph.Graph()
+        g.add_node(graph.Node("project:p", "project", "p"))
+        for i in range(3):
+            g.add_node(graph.Node("concept:mine%d" % i, "concept", "mine%d" % i)); g.add_edge("project:p", "concept:mine%d" % i, "uses")
+        g.add_node(graph.Node("section:p/auth", "section", "Auth")); g.add_edge("project:p", "section:p/auth", "contains")
+        g.add_node(graph.Node("concept:via-section", "concept", "via-section")); g.add_edge("section:p/auth", "concept:via-section", "uses")
+        g.add_node(graph.Node("concept:docker", "concept", "Docker"))          # foreign hub, degree 20
+        for i in range(20):
+            g.add_node(graph.Node("project:o%d" % i, "project", "o%d" % i, meta={"external": True})); g.add_edge("project:o%d" % i, "concept:docker", "used-by")
+        ids = [n.id for n in graph.top(g, n=6, near="project:p")]
+        self.assertEqual(ids[0], "project:p")
+        self.assertNotIn("concept:docker", ids)                                 # 6 own nodes exist, no room for the foreign hub
+        self.assertIn("concept:via-section", ids)                               # two hops away still counts as own
+        ids = [n.id for n in graph.top(g, n=12, near="project:p")]
+        self.assertIn("concept:docker", ids)                                    # neighbourhood exhausted → global fill
+        self.assertEqual(ids[:6].count("concept:docker"), 0)                    # …and it fills the tail, never the head
+        self.assertEqual([n.id for n in graph.top(g, n=1, near="project:nope")][0], "concept:docker")   # unknown anchor → global
+        g.add_edge("project:p", "concept:docker", "mentions")                  # prose mention ≠ relationship
+        ids = [n.id for n in graph.top(g, n=6, near="project:p")]
+        self.assertNotIn("concept:docker", ids)
+
+    def test_find_ignores_vault_directory_names(self):
+        """A vault note's path is absolute (`…/vault/concepts/x.md`): matching the whole path made
+        "concepts", "projects" and every directory of the vault root a hit on every note."""
+        self.assertEqual(graph.find(self.g, "concepts"), [])
+        self.assertEqual([n for n in graph.find(self.g, "projects") if n.type == "project"], [])
+        self.assertEqual(graph.find(self.g, "postgresql.md")[0].id, "concept:postgresql")   # basename still matches
+        self.assertTrue(any(n.type == "file" for n in graph.find(self.g, "src/auth")))      # repo-relative code paths still do
+
+    def test_concept_lines_carry_the_first_sentence(self):
+        n = self.g.nodes["concept:postgresql"]
+        self.assertEqual(n.meta.get("summary"), "Relational store.")
+        self.assertIn("— PostgreSQL · Relational store.", graph._line(self.g, n))
+        self.assertNotIn(" · ", graph._line(self.g, self.g.nodes["project:demo"]))          # only concepts
+
     def test_renderers_respect_caps_and_shape(self):
         out = graph.render_find(self.g, graph.find(self.g, "auth"))
         self.assertLessEqual(out.count("\n"), 15); self.assertRegex(out.splitlines()[0], r"^\w+ \S+  \S+  — .+$")

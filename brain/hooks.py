@@ -229,7 +229,7 @@ def _prepare_session_start(ctx):
     g = None
     try:
         g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
-        pre["top"] = graph.render_top(g, graph.top(g, n=graph.TOP_LIMIT)).rstrip("\n")
+        pre["top"] = graph.render_top(g, graph.top(g, n=graph.TOP_LIMIT, near=graph.node_id("project", ctx.project.slug))).rstrip("\n")
     except Exception as e:
         config.log_error("graph load failed: %r" % e)
     if g is not None:
@@ -245,7 +245,7 @@ def _prepare_session_start(ctx):
 def _graph_lines(ctx):
     lines = []
     if ctx.pre.get("top"):
-        lines += ["", "Brain: most-connected nodes — `%s graph near <id>` for a neighborhood, `graph find <term>` before grepping code:" % cli_command(), ctx.pre["top"]]
+        lines += ["", "Brain: most-connected nodes for %s — `%s graph near <id>` for a neighborhood, `graph find <term>` before grepping code:" % (ctx.project.slug, cli_command()), ctx.pre["top"]]
     if ctx.pre.get("health"):
         lines += ["", ctx.pre["health"]]
     return lines

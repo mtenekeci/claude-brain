@@ -147,6 +147,24 @@ class LintTests(unittest.TestCase):
         self.assertIn("3 concept links auto-applied", lint.health_line(res2))
         self.assertEqual(lint.health_line(dict(res2, auto_applied=["one"])).count("1 concept link auto-applied"), 1)
 
+    def test_malformed_concept_notes_are_reported(self):
+        """A note under concepts/ written in another frontmatter dialect (`name:` + nested
+        `metadata.type`) is a concept with no type to the graph. Report it once, vault-wide."""
+        import os
+        cdir = os.path.join(self.vault, "concepts")
+        with open(os.path.join(cdir, "webauthn.md"), "w") as f:
+            f.write("---\nname: webauthn\ndescription: passkeys\nmetadata:\n  type: subsystem\n---\n\nBody.\n")
+        with open(os.path.join(cdir, "untyped.md"), "w") as f:
+            f.write("---\nconcept: Untyped\nupdated: 2026-01-01\n---\n\n# Untyped\n\nBody.\n")
+        g = graph.build(self.vault, "demo", self.repo)
+        res = lint.run(self.vault, "demo", self.repo, g, apply=False)
+        self.assertEqual(sorted(res["malformed"]), [["untyped", "missing type:"], ["webauthn", "missing concept:, type:"]])
+        self.assertIn("2 malformed concept notes", lint.health_line(res))
+        out = lint.render(res, g)
+        self.assertIn("malformed concept notes", out); self.assertIn("webauthn (missing concept:, type:)", out)
+        self.assertNotIn("malformed", lint.render(lint.run(self.vault, "demo", self.repo, graph.build(self.vault, "demo", self.repo), apply=False), g)
+                         if not (os.remove(os.path.join(cdir, "webauthn.md")) or os.remove(os.path.join(cdir, "untyped.md"))) else "")
+
     def test_session_start_health_line(self):
         r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         self.assertIn("Brain: graph health —", r.stdout)

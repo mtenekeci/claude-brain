@@ -169,7 +169,8 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
     if slug not in slugs:
         slugs = [slug] + slugs
     result = {"auto_applied": [], "auto_pending": 0, "candidates": [], "stale": [], "dangling": [],
-              "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs, "applied": apply}
+              "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs, "applied": apply,
+              "malformed": malformed_concepts(vault_root)}
     for s in slugs:
         # Other projects build from their own vault dir; build()/load() tolerate project_dir=None
         # because the code layer is read from the vault's codelayer.json, not the repo.
@@ -219,6 +220,26 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
         graph.load(vault_root, slug, project_dir, force=True)   # our own writes just staled the cache
     return result
 
+REQUIRED_CONCEPT_KEYS = ("concept", "type")
+
+def malformed_concepts(vault_root):
+    """[[slug, 'missing concept:, type:'], …] for notes under concepts/ whose frontmatter lacks
+    the keys the template requires. Vault-wide and independent of the project: a note in
+    another frontmatter dialect (`name:` + nested `metadata.type`) is a typeless concept to
+    the graph, and nothing else reports it."""
+    cdir = os.path.join(vault_root or "", "concepts")
+    out = []
+    try:
+        names = sorted(f for f in os.listdir(cdir) if f.endswith(".md"))
+    except OSError:
+        return out
+    for f in names:
+        fm, _ = vault.parse_frontmatter(vault.read(os.path.join(cdir, f)))
+        missing = [k for k in REQUIRED_CONCEPT_KEYS if not str(fm.get(k, "")).strip()]
+        if missing:
+            out.append([graph.slugify(f[:-3]), "missing " + ", ".join(k + ":" for k in missing)])
+    return out
+
 def health_line(res):
     """One line, or "" when there is nothing to say. Auto-applied writes are reported too:
     they edit shared concept notes, so the user has to be able to see them happen. When `res`
@@ -230,9 +251,12 @@ def health_line(res):
     a = len(res.get("auto_applied") or [])
     p = int(res.get("auto_pending") or 0)
     applied = res.get("applied", True)
-    if not (n or m or k or a or p):
+    b = len(res.get("malformed") or [])
+    if not (n or m or k or a or p or b):
         return ""
     parts = []
+    if b:
+        parts.append("%d malformed concept note%s" % (b, "" if b == 1 else "s"))
     if n or m or k:
         parts.append("%d unlinked concept%s, %d stale Used-by entr%s, %d dangling link%s" % (
             n, "" if n == 1 else "s", m, "y" if m == 1 else "ies", k, "" if k == 1 else "s"))
@@ -278,6 +302,10 @@ def render(res, g=None):
         lines += ["  - %s → [[%s]]" % (d[0], d[1]) for d in dang[:DANGLING_RENDER_LIMIT]]
         if len(dang) > DANGLING_RENDER_LIMIT:
             lines.append("  … and %d more" % (len(dang) - DANGLING_RENDER_LIMIT))
+    bad = res.get("malformed") or []
+    if bad:
+        lines.append("malformed concept notes (frontmatter needs `concept:` and `type:`): "
+                     + ", ".join("%s (%s)" % (s, why) for s, why in bad))
     # run() skips the O(n²) duplicate scan; pay for it here, where it is actually displayed.
     dups = res.get("duplicates") or (duplicates(g) if g is not None else [])
     if dups:
