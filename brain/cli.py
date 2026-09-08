@@ -86,11 +86,7 @@ def _init(args):
     initproj.ensure_vault(vault_root)
     repo_url = gitinfo._git(pdir_repo, "remote", "get-url", "origin").strip() if args.type == "code" else ""
     written = initproj.create_project(vault_root, slug, name, args.type, pdir_repo if args.type == "code" else None, repo_url)
-    # Grant permissions against the vault path as configured (not the realpath'd canonical form
-    # used for internal filesystem/comparison work) — that's what the user actually sees/expects
-    # in their settings.json, and it's what a fresh `--vault` install just saved verbatim.
-    raw_vault = config.load_config().get("vault") or vault_root
-    granted = 0 if args.no_permissions else initproj.grant_permissions(raw_vault)
+    granted = 0 if args.no_permissions else initproj.grant_permissions(vault_root)
     print("Brain initialized for %s (%s)\n\nVault:          %s\nContext:        %s\nLog:            %s" % (
         name, slug, vault_root, os.path.join(vault_root, "projects", slug, "context.md"), os.path.join(vault_root, "projects", slug, "log.md")))
     if args.type == "code":

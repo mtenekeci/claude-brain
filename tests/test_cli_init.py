@@ -7,7 +7,8 @@ class InitTests(unittest.TestCase):
     def setUp(self):
         self._env = dict(os.environ); self._cwd = os.getcwd()
         self.tmp = tempfile.TemporaryDirectory()
-        self.vault = os.path.join(self.tmp.name, "vault"); os.makedirs(self.vault)
+        # realpath: brain canonicalises every path it stores, and macOS tmpdirs are symlinked.
+        self.vault = os.path.realpath(os.path.join(self.tmp.name, "vault")); os.makedirs(self.vault)
         write_config(self.tmp.name, self.vault)
         os.environ["BRAIN_USER_SETTINGS"] = os.path.join(self.tmp.name, "user-settings.json")
         os.environ["HOME"] = self.tmp.name
@@ -40,7 +41,8 @@ class InitTests(unittest.TestCase):
         cm = vault.read(os.path.join(self.repo, "CLAUDE.md"))
         self.assertTrue(cm.startswith("# Brain: Demo App\n\nbrain: demo-app\n")); self.assertTrue(cm.endswith("---\n# My notes\nkeep me\n"))
         self.assertEqual(project.resolve_project(self.repo).slug, "demo-app")
-        settings = json.load(open(os.environ["BRAIN_USER_SETTINGS"], encoding="utf-8"))
+        with open(os.environ["BRAIN_USER_SETTINGS"], encoding="utf-8") as f:
+            settings = json.load(f)
         self.assertIn("Read(%s/**)" % self.vault, settings["permissions"]["allow"])
         self.assertIn("=== SEEDING PACKET ===", out); self.assertIn("## readme", out); self.assertIn("A demo app.", out); self.assertIn("## deps", out); self.assertIn("next-auth", out)
         self.assertNotIn("# Brain:", out.split("## claude-md")[1].split("## memory")[0])           # packet shows only the user's part of CLAUDE.md
@@ -59,7 +61,8 @@ class InitTests(unittest.TestCase):
         with open(os.environ["BRAIN_USER_SETTINGS"], "w") as f: f.write("{not json")
         os.remove(os.path.join(self.repo, "CLAUDE.md"))
         rc, out = self._run("init", "--name", "Third", "--type", "code"); self.assertEqual(rc, 1); self.assertIn("not in the expected shape", out)
-        self.assertEqual(open(os.environ["BRAIN_USER_SETTINGS"]).read(), "{not json")            # untouched
+        with open(os.environ["BRAIN_USER_SETTINGS"]) as f:
+            self.assertEqual(f.read(), "{not json")                                              # untouched
         self.assertFalse(os.path.exists(os.path.join(self.vault, "projects", "third")))
         with open(os.environ["BRAIN_USER_SETTINGS"], "w") as f: f.write('{"permissions": []}')
         rc, out = self._run("init", "--name", "Third", "--type", "code"); self.assertEqual(rc, 1)
@@ -75,8 +78,19 @@ class InitTests(unittest.TestCase):
     def test_grant_permissions_backs_up_before_first_write(self):
         with open(os.environ["BRAIN_USER_SETTINGS"], "w") as f: f.write('{"permissions": {"allow": ["Read(x)"]}, "other": 1}')
         self.assertEqual(initproj.grant_permissions(self.vault), 5)
-        self.assertEqual(open(os.environ["BRAIN_USER_SETTINGS"] + ".brain-bak").read(), '{"permissions": {"allow": ["Read(x)"]}, "other": 1}')
-        data = json.load(open(os.environ["BRAIN_USER_SETTINGS"])); self.assertEqual(data["other"], 1); self.assertIn("Read(x)", data["permissions"]["allow"])
+        with open(os.environ["BRAIN_USER_SETTINGS"] + ".brain-bak") as f:
+            self.assertEqual(f.read(), '{"permissions": {"allow": ["Read(x)"]}, "other": 1}')
+        with open(os.environ["BRAIN_USER_SETTINGS"]) as f:
+            data = json.load(f)
+        self.assertEqual(data["other"], 1); self.assertIn("Read(x)", data["permissions"]["allow"])
+
+    def test_empty_settings_file_is_treated_as_absent(self):
+        open(os.environ["BRAIN_USER_SETTINGS"], "w").close()                                     # 0-byte file: benign, not malformed
+        self.assertIsNone(initproj.settings_shape_error())
+        self.assertEqual(initproj.grant_permissions(self.vault), 5)
+        with open(os.environ["BRAIN_USER_SETTINGS"], encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertIn("Read(%s/**)" % self.vault, data["permissions"]["allow"])
 
     def test_init_topic_project(self):
         rc, out = self._run("init", "--name", "Auth Redesign", "--type", "topic")
@@ -90,6 +104,15 @@ class InitTests(unittest.TestCase):
         p = initproj.seeding_packet(self.repo, limit=3000)
         self.assertLessEqual(len(p), 3100); self.assertIn("… (truncated)", p)
         for sec in ("## manifest", "## readme", "## git", "## claude-md", "## memory", "## deps", "## entry-points"): self.assertIn(sec, p)
+
+    def test_packet_memory_section_reads_project_memory_files(self):
+        # Claude Code keeps the leading dash when encoding cwd: /a/b -> -a-b (no lstrip).
+        enc = os.path.realpath(self.repo).replace("/", "-")
+        mdir = os.path.join(self.tmp.name, ".claude", "projects", enc, "memory")
+        os.makedirs(mdir)
+        with open(os.path.join(mdir, "note.md"), "w") as f: f.write("Remember the auth flow quirk.\n")
+        p = initproj.seeding_packet(self.repo)
+        self.assertIn("## memory", p); self.assertIn("Remember the auth flow quirk.", p)
 
     def test_init_without_config(self):
         os.environ["BRAIN_CONFIG"] = "/nonexistent"

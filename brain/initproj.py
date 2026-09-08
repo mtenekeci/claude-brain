@@ -53,7 +53,8 @@ def _head(path, n):
 
 
 def _memory_dir(project_dir):
-    enc = os.path.realpath(project_dir).lstrip("/").replace("/", "-")
+    # Claude Code keeps the leading dash: /Users/x/p -> -Users-x-p. No lstrip("/") here.
+    enc = os.path.realpath(project_dir).replace("/", "-")
     return os.path.join(os.path.expanduser("~"), ".claude", "projects", enc, "memory")
 
 
@@ -180,16 +181,22 @@ def settings_path():
 
 
 def settings_shape_error(path=None):
-    """None when the user settings file is absent or a well-shaped JSON object; else a single,
-    uniform message (unparsable JSON and wrong-shaped JSON are indistinguishable to the caller —
-    both mean 'fix it or pass --no-permissions'). Never writes."""
+    """None when the user settings file is absent, empty, or a well-shaped JSON object; else a
+    single, uniform message (unparsable JSON and wrong-shaped JSON are indistinguishable to the
+    caller — both mean 'fix it or pass --no-permissions'). Never writes."""
     path = path or settings_path()
     if not os.path.exists(path):
         return None
     try:
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
+            raw = f.read()
+    except OSError:
+        return "brain: %s is not in the expected shape — fix it or pass --no-permissions" % path
+    if not raw.strip():
+        return None                                # 0-byte/whitespace-only file: benign, treat as absent
+    try:
+        data = json.loads(raw)
+    except ValueError:
         return "brain: %s is not in the expected shape — fix it or pass --no-permissions" % path
     bad_shape = (not isinstance(data, dict)
                  or ("permissions" in data and not isinstance(data["permissions"], dict))
