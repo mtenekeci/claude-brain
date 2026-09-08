@@ -74,7 +74,8 @@ def make_source_tree(repo):
     w("lib/helpers.py", "def h():\n    return 1\n")
     w("node_modules/junk/index.js", "export function junk() {}\n")
     w("dist/out.js", "export function built() {}\n")
-    w("README.md", "# Demo\n")
+    if not os.path.exists(os.path.join(repo, "README.md")):  # preserve a caller-seeded README
+        w("README.md", "# Demo\n")
     w(".gitignore", "node_modules/\ndist/\n")
     subprocess.run(["git", "-C", repo, "add", "-A"], check=True)
     subprocess.run(["git", "-C", repo, "commit", "-q", "-m", "tree"], check=True)

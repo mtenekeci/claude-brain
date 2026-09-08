@@ -18,6 +18,30 @@ def vault_root():
     # realpath: every path comparison downstream (hooks.under) assumes a canonical vault root.
     return os.path.realpath(os.path.expanduser(v)) if isinstance(v, str) and v else None
 
+def save_config(data):
+    """Atomic tmp+replace write of the full config dict to the config path."""
+    path = _config_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    os.replace(tmp, path)
+
+def set_value(key, value):
+    """Minimal `brain config set` mechanics. `vault` is expanduser+realpath'd and must already
+    exist as a directory — callers (e.g. `brain init --vault`) create it first. Task 3 extends
+    this with more keys/validation; keep additions here self-contained."""
+    data = load_config()
+    if key == "vault":
+        v = os.path.realpath(os.path.expanduser(value))
+        if not os.path.isdir(v):
+            raise ValueError("brain: vault directory does not exist: %s" % v)
+        value = v
+    data[key] = value
+    save_config(data)
+    return value
+
 def gate_mode():
     """'all' (default) | 'commits' | 'off' — Stop-gate setting (spec §7.7)."""
     return str(load_config().get("gate", "all"))
