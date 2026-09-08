@@ -12,7 +12,7 @@ This prints, among other lines: `context.md: <N> lines (cap 150)` (plus `context
 
 ## Then
 
-1. **Rewrite `context.md`** (v1 rules): `## State` (2-3 sentences — what exists, what works, what's changing), `## Active Work` (what's in progress), `## Decisions` (add this session's, don't remove older ones yet), `## Open Questions` (remove resolved, add new). If the resulting file is over 150 lines, compress every `## Decisions` entry beyond the 5 most recent to one line: `- [<date>] <one-sentence summary>`. Apply the Linking rules to everything you touch.
+1. **Rewrite `context.md`** (v1 rules): `## State` (2-3 sentences — what exists, what works, what's changing), `## Active Work` (what's in progress), `## Decisions` (add this session's, don't remove older ones yet), `## Open Questions` (remove resolved, add new). If the resulting file is over 150 lines, compress every `## Decisions` entry beyond the 5 most recent to one line: `- [<date>] <one-sentence summary>`. If `sync-prepare` reported `context.md oversize: <N> KB`, lines — not line count — are the problem: cut `## State` and `## Active Work` back to the current facts in a few sentences each, and move the narrative they accumulated (what happened, when, why) into the session's `log.md` entry, which is where history belongs. Apply the Linking rules to everything you touch.
 2. **Resolve lint candidates** (up to 5, from `sync-prepare`'s output): for each, either confirm it — add one `uses:: [[concepts/<slug>|<Name>]]` line in `context.md`'s `## Architecture` section, directly above the `Full reference:` line (the same place `graph lint`'s auto-apply writes) — or, if it's not a real relationship, dismiss it:
    ```bash
    {BRAIN} graph dismiss <slug>

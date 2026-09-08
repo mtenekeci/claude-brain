@@ -102,6 +102,8 @@ class ProjectCliTests(unittest.TestCase):
         backups = [f for f in os.listdir(self.repo) if f.startswith("CLAUDE.md.brain-bak")]
         self.assertEqual(len(backups), 1)
         self.assertEqual(vault.read(os.path.join(self.repo, backups[0])), self.FRONTMATTER_CLAUDE_MD)
+        # a backup nobody is told about is a file the user finds later and cannot explain
+        self.assertIn("CLAUDE.md backed up to %s" % backups[0], out)
 
     def test_remove_preserves_frontmatter_and_backs_up(self):
         claude_md = os.path.join(self.repo, "CLAUDE.md")
@@ -112,6 +114,7 @@ class ProjectCliTests(unittest.TestCase):
         self.assertIn("# My notes\nkeep me\n", text)
         backups = [f for f in os.listdir(self.repo) if f.startswith("CLAUDE.md.brain-bak")]
         self.assertEqual(len(backups), 1)
+        self.assertIn("CLAUDE.md backed up to %s" % backups[0], out)
 
     def test_disconnect_keeps_a_frontmatter_only_claude_md(self):
         """Nothing but frontmatter + the brain block: the file must survive with its frontmatter,

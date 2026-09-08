@@ -492,9 +492,13 @@ def _connected_folder(path, want_slug):
 
 def _strip_brain_block(claude_md):
     """Remove the brain block, keeping the user's frontmatter and everything below it, after a
-    `.brain-bak` copy. `remove`/`disconnect` are documented as touching only the brain block."""
+    `.brain-bak` copy. `remove`/`disconnect` are documented as touching only the brain block.
+
+    Returns the backup path (or None) so the caller can say it wrote one — a backup nobody is
+    told about is a file the user finds later and cannot explain."""
     from brain import migrate
-    migrate.rewrite_block(claude_md, lambda head: "")
+    _, _, bak = migrate.rewrite_block(claude_md, lambda head: "")
+    return bak
 
 
 def _cmd_remove(args):
@@ -519,11 +523,11 @@ def _cmd_remove(args):
         print("brain: refusing to delete outside vault projects/: %s" % pdir); return 1
     fm, _ = vault.parse_frontmatter(vault.read(os.path.join(pdir, "context.md")))
     path = fm.get("path", "")
-    touched, warn = False, None
+    touched, warn, backup = False, None, None
     if path and path != "—" and os.path.isdir(path):
         ok, other = _connected_folder(path, slug)
         if ok:
-            _strip_brain_block(os.path.join(path, "CLAUDE.md"))
+            backup = _strip_brain_block(os.path.join(path, "CLAUDE.md"))
             migrate.strip_legacy_hooks(os.path.join(path, ".claude", "settings.json"))
             touched = True
         else:
@@ -536,6 +540,8 @@ def _cmd_remove(args):
     print("Index row removed.")
     if touched:
         print("CLAUDE.md brain section removed from %s" % path)
+        if backup:
+            print("CLAUDE.md backed up to %s" % os.path.basename(backup))
     if warn:
         print(warn)
     return 0
@@ -567,9 +573,11 @@ def _cmd_disconnect(args):
         else:
             print("%s/CLAUDE.md has no brain block — project may already be disconnected. Vault files are untouched." % path)
         return 1
-    _strip_brain_block(os.path.join(path, "CLAUDE.md"))
+    backup = _strip_brain_block(os.path.join(path, "CLAUDE.md"))
     print("Disconnected: %s" % slug)
     print("CLAUDE.md brain section removed from %s" % path)
+    if backup:
+        print("CLAUDE.md backed up to %s" % os.path.basename(backup))
     print("Vault files untouched — history preserved at %s" % os.path.join(vault_root, "projects", slug))
     return 0
 

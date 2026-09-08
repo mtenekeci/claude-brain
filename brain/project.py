@@ -72,12 +72,14 @@ def resolve_project(cwd):
         d = parent
 
 def vault_project_dir(vault, slug):
-    """<vault>/projects/<slug>. Raises ValueError on a slug that is not a bare directory name.
+    """<vault>/projects/<slug>, validating the slug. Raises ValueError on anything that is not
+    a bare directory name.
 
-    The check lives HERE, not only in the CLI, because it is the one funnel every entry point
-    goes through to turn a slug into a filesystem path — `cli._require_valid_slug` gives the
-    user a clean message, and this makes a caller that forgets it fail loudly instead of
-    writing outside projects/."""
+    The check lives HERE and not only in the CLI so a caller that forgets `_require_valid_slug`
+    fails loudly instead of writing outside projects/ (`cli._require_valid_slug` is what gives
+    the user a clean message). It is not the only place such a path is composed — `graph`,
+    `lint` and `initproj` still join `<vault>/projects/<slug>` themselves — but every slug they
+    use has already been through `valid_slug` via `resolve_project` or a directory listing."""
     if not valid_slug(slug):
         raise ValueError("invalid slug %r" % (slug,))
     return os.path.join(vault, "projects", slug)
