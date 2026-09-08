@@ -10,8 +10,11 @@ A rewrite of the runtime. v1 was a markdown behavioural spec plus four bash hook
 copied into `~/.claude` and registered per project; v2 is a stdlib-Python package the plugin
 ships and runs itself, with a derived knowledge graph and a per-project code map on top.
 
-Upgrading is automatic — see Migration below. No vault content changes shape, and nothing in
-your vault is rewritten by the upgrade.
+Upgrading is automatic — see Migration below. No vault content changes shape. The upgrade
+itself rewrites only a stale `path:` in `context.md`; the first v2 session then runs the
+concept lint, which auto-applies up to five manifest-dependency links (a `uses::` line in
+`context.md` and a `## Used by` row in the matching concept note) and reports every one of
+them — `/brain graph dismiss <slug>` makes a link stay gone.
 
 ### Added
 

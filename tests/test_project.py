@@ -69,6 +69,13 @@ class ProjectTests(unittest.TestCase):
     def test_vault_project_dir(self):
         self.assertEqual(project.vault_project_dir("/v", "s"), "/v/projects/s")
 
+    def test_vault_project_dir_refuses_a_path_shaped_slug(self):
+        """The last line of defence: a caller that forgets `_require_valid_slug` must not be
+        able to build a path outside <vault>/projects/ at all."""
+        for bad in ("../evil", "..", ".", "a/b", "", "/abs"):
+            with self.assertRaises(ValueError):
+                project.vault_project_dir("/v", bad)
+
     def test_undecodable_claude_md(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "CLAUDE.md"), "wb") as f:

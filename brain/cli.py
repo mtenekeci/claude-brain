@@ -1,6 +1,6 @@
 """CLI subcommands. Plan 2: graph, map. Plan 3 adds init/sync-prepare/sync-finish/status/load/
 config/remove/disconnect/map --annotate."""
-import argparse, glob, json, os, re, shutil, sys, time
+import argparse, json, os, re, shutil, sys, time
 from brain import config, project, vault
 
 
@@ -213,7 +213,10 @@ def _cmd_sync_prepare(args):
     n_entries = vault.count_log_entries(log_text)
     placeholder = vault.last_entry_is_placeholder(log_text)
     print("slug: %s" % proj.slug)
-    print("context.md: %d lines (cap 150)" % len(ctx_text.splitlines()))
+    print("context.md: %d lines (cap %d)" % (len(ctx_text.splitlines()), vault.CONTEXT_LINE_CAP))
+    over_kb = vault.for_injection(ctx_text)[1]
+    if over_kb:
+        print("context.md oversize: %d KB (SessionStart truncates the injection at %d KB)" % (over_kb, vault.INJECT_BYTE_CAP // 1024))
     print("last log entry: Session %d [%s]" % (n_entries, "placeholder" if placeholder else "real"))
     print("next session: %d" % (n_entries if placeholder else n_entries + 1))
     from brain import gitinfo
@@ -251,21 +254,34 @@ def _cmd_sync_finish(args):
     codemap.regenerate(proj.project_dir, pdir)
     graph.load(vault_root, proj.slug, proj.project_dir, force=True)
     n_lines = len(vault.read(ctx_path).splitlines())
-    print("context.md: %d lines (cap 150)" % n_lines)
-    if n_lines > 150:
+    print("context.md: %d lines (cap %d)" % (n_lines, vault.CONTEXT_LINE_CAP))
+    if n_lines > vault.CONTEXT_LINE_CAP:
         print("WARNING: over cap — compress ## Decisions beyond the 5 most recent")
     print("Brain synced: %s" % proj.slug)
     return 0
 
 
+def _v1_script_names():
+    """The four script basenames v1 installed. `migrate._LEGACY_MARKERS` is the single source
+    of truth — it is also what `strip_legacy_hooks` matches settings entries against."""
+    from brain import migrate
+    return tuple(m.lstrip("/") for m in migrate._LEGACY_MARKERS)
+
+
 def _orphan_scripts(vault_root, proj):
-    """[(basename, path-that-references-it-or-None), ...] for every `~/.claude/brain-*.sh`
-    orphaned from the old (v1) per-project hook registration. Referenced = the current
-    project's `.claude/settings.json`, or any project-index `path:` column that mentions it."""
-    paths = sorted(glob.glob(os.path.expanduser("~/.claude/brain-*.sh")))
+    """[(basename, path-that-references-it-or-None), ...] for the v1 per-project hook scripts
+    still sitting in `~/.claude/`. Referenced = the user's own `settings.json` (v1 hooks could
+    be registered globally), the current project's `.claude/settings.json`, or any
+    project-index `path:` column that mentions it.
+
+    Deliberately NOT a `~/.claude/brain-*.sh` glob: `--clean-orphans` deletes with no backup
+    and no per-file confirmation, and that namespace belongs to the user too — a
+    `brain-notes.sh` of their own is not ours to remove."""
+    from brain import initproj
+    paths = sorted(p for p in (os.path.expanduser("~/.claude/" + n) for n in _v1_script_names()) if os.path.exists(p))
     if not paths:
         return []
-    settings_paths = [os.path.join(proj.project_dir, ".claude", "settings.json")]
+    settings_paths = [initproj.settings_path(), os.path.join(proj.project_dir, ".claude", "settings.json")]
     idx_text = vault.read(os.path.join(vault_root, "_system", "project-index.md"))
     for line in idx_text.splitlines():
         cells = _index_row_cells(line)
@@ -340,7 +356,10 @@ def _cmd_status(args):
     print("Backend: %s" % backend)
     print("Updated: %s" % fm.get("updated", "?"))
     print("Sessions: %d" % vault.count_log_entries(log_text))
-    print("Context size: %d / 150 lines" % len(ctx_text.splitlines()))
+    print("Context size: %d / %d lines" % (len(ctx_text.splitlines()), vault.CONTEXT_LINE_CAP))
+    over_kb = vault.for_injection(ctx_text)[1]
+    if over_kb:
+        print("context.md oversize: %d KB (SessionStart truncates the injection at %d KB — trim it with /brain sync)" % (over_kb, vault.INJECT_BYTE_CAP // 1024))
     print("Hooks: plugin-shipped (%d events)" % n_hooks)
     print("Codemap: %s" % codemap_status)
     print("Graph: %d nodes, %d edges (cache %ds old)" % (len(g.nodes), len(g.edges), age))
@@ -402,7 +421,9 @@ def _cmd_load(args):
             used_by = vault.get_section(ctext, "Used by")
             valid = []
             for s in _USED_BY_LINK_RE.findall(used_by):
-                if os.path.exists(os.path.join(vault_root, "projects", s, "context.md")):
+                # Vault-authored, but the same class as a user-supplied slug: the link regex's
+                # `[^/\]]+` admits `..`, and these slugs go straight into a vault path below.
+                if _require_valid_slug(s) is None and os.path.exists(os.path.join(vault_root, "projects", s, "context.md")):
                     valid.append(s)
                     if s not in seen:
                         seen.add(s); resolved.append(s)
@@ -470,12 +491,14 @@ def _connected_folder(path, want_slug):
 
 
 def _strip_brain_block(claude_md):
-    text = vault.read(claude_md)
-    _, rest = project.split_brain_block(text)
-    if rest.strip():
-        vault.write(claude_md, rest)
-    else:
-        os.remove(claude_md)
+    """Remove the brain block, keeping the user's frontmatter and everything below it, after a
+    `.brain-bak` copy. `remove`/`disconnect` are documented as touching only the brain block.
+
+    Returns the backup path (or None) so the caller can say it wrote one — a backup nobody is
+    told about is a file the user finds later and cannot explain."""
+    from brain import migrate
+    _, _, bak = migrate.rewrite_block(claude_md, lambda head: "")
+    return bak
 
 
 def _cmd_remove(args):
@@ -500,11 +523,11 @@ def _cmd_remove(args):
         print("brain: refusing to delete outside vault projects/: %s" % pdir); return 1
     fm, _ = vault.parse_frontmatter(vault.read(os.path.join(pdir, "context.md")))
     path = fm.get("path", "")
-    touched, warn = False, None
+    touched, warn, backup = False, None, None
     if path and path != "—" and os.path.isdir(path):
         ok, other = _connected_folder(path, slug)
         if ok:
-            _strip_brain_block(os.path.join(path, "CLAUDE.md"))
+            backup = _strip_brain_block(os.path.join(path, "CLAUDE.md"))
             migrate.strip_legacy_hooks(os.path.join(path, ".claude", "settings.json"))
             touched = True
         else:
@@ -517,6 +540,8 @@ def _cmd_remove(args):
     print("Index row removed.")
     if touched:
         print("CLAUDE.md brain section removed from %s" % path)
+        if backup:
+            print("CLAUDE.md backed up to %s" % os.path.basename(backup))
     if warn:
         print(warn)
     return 0
@@ -548,9 +573,11 @@ def _cmd_disconnect(args):
         else:
             print("%s/CLAUDE.md has no brain block — project may already be disconnected. Vault files are untouched." % path)
         return 1
-    _strip_brain_block(os.path.join(path, "CLAUDE.md"))
+    backup = _strip_brain_block(os.path.join(path, "CLAUDE.md"))
     print("Disconnected: %s" % slug)
     print("CLAUDE.md brain section removed from %s" % path)
+    if backup:
+        print("CLAUDE.md backed up to %s" % os.path.basename(backup))
     print("Vault files untouched — history preserved at %s" % os.path.join(vault_root, "projects", slug))
     return 0
 
@@ -561,6 +588,9 @@ def _cmd_repair(args):
     if vault_root is None:
         return 2
     slug = args.slug
+    err = _require_valid_slug(slug)
+    if err:
+        print(err); return 1
     pdir = project.vault_project_dir(vault_root, slug)
     ctx_path = os.path.join(pdir, "context.md")
     if not os.path.exists(ctx_path):
@@ -575,20 +605,10 @@ def _cmd_repair(args):
         return 1
     target_dir = existing_proj.project_dir if existing_proj is not None else cwd
     claude_md = os.path.join(target_dir, "CLAUDE.md")
-    text = vault.read(claude_md)
-    fm_prefix = text[:project.body_start(text)]
-    body = text[len(fm_prefix):]
-    if existing_proj is not None:
-        # Already has a valid brain block for this slug: preserve frontmatter, replace only
-        # the brain block, keep the rest.
-        head, rest = project.split_brain_block(body)
-    else:
-        # Absent, or present with no recognizable brain line: v1 rule is block + existing verbatim.
-        head, rest = "", body
-    name = migrate._display_name(head, slug)
-    if os.path.exists(claude_md):
-        vault.write(migrate._backup_path(claude_md), text)
-    vault.write(claude_md, fm_prefix + migrate.slim_block(name, slug) + rest)
+    # replace_existing=True: a valid brain block for this slug is replaced in place. False:
+    # absent, or present with no recognizable brain line — the v1 rule is block + file verbatim.
+    migrate.rewrite_block(claude_md, lambda head: migrate.slim_block(migrate._display_name(head, slug), slug),
+                          replace_existing=existing_proj is not None)
     fm, _ = vault.parse_frontmatter(vault.read(ctx_path))
     ctx_path_field = fm.get("path", "")
     if ctx_path_field and ctx_path_field != "—" and os.path.realpath(os.path.expanduser(ctx_path_field)) != target_dir:

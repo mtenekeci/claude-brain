@@ -165,6 +165,10 @@ def _claim_regen_slot(ctx, enabled):
 
 def _prepare_session_start(ctx):
     """Everything slow or git-touching for SessionStart runs here, BEFORE the session lock."""
+    # os.listdir + getmtime + remove over the whole sessions dir. Harmless in isolation, but it
+    # is I/O, and the one rule of the locked body is that it holds none. Nothing here depends on
+    # this session's state, and prune is mtime-based, so a session started seconds ago is safe.
+    state.prune(days=7)
     # log.md is read ONCE per event: the locked body needs the last entry and prepare needs the
     # entry count, and re-reading it under the lock put file I/O in the critical section.
     log_text = vault.read(ctx.log_path)
@@ -208,7 +212,8 @@ def _prepare_session_start(ctx):
                 # both. Read pre-lock, like everything else here.
                 stored_sha, generated, _ = codemap.split_codemap(
                     vault.read(os.path.join(ctx.pdir, "codemap.md")))
-                pre["map_fresh"] = bool(generated.strip()) and stored_sha == pre["regen_key"]
+                pre["map_generated"] = bool(generated.strip())
+                pre["map_fresh"] = pre["map_generated"] and stored_sha == pre["regen_key"]
                 pre["want_regen"] = not pre["map_fresh"]
             else:
                 # No background process will ever fill the stub in, so the foreground build is
@@ -250,7 +255,6 @@ def on_session_start(ctx):
     _prepare_session_start(). context.md is read HERE (not in prepare) because lint's
     auto-apply may have just rewritten it."""
     source = str(ctx.payload.get("source") or "startup")
-    state.prune(days=7)
     ctx.state.stop_blocks_this_turn = 0
     migrated_line = ctx.pre.get("migrated_line", "")
     if ctx.state.log_entries_at_start < 0:
@@ -280,17 +284,35 @@ def on_session_start(ctx):
     if not context_text:
         msg = "Brain: project '%s' has no context.md at %s — run /brain init.\n" % (ctx.project.slug, ctx.pdir)
         return HookResult(migrated_line + "\n" + msg if migrated_line else msg, after_lock=after_lock)
-    parts.append(_banner("VAULT FILE: " + ctx.context_path) + context_text.rstrip("\n"))
+    # Bytes, not lines: an 81 KB context.md in 128 lines passes the line cap and then buries
+    # every line below it — the graph hints, the health line, the migration notice.
+    shown, over_kb = vault.for_injection(context_text)
+    parts.append(_banner("VAULT FILE: " + ctx.context_path) + shown.rstrip("\n"))
+    if over_kb:
+        parts += ["", "Brain: context.md truncated at %d KB — trim it (/brain sync)" % (vault.INJECT_BYTE_CAP // 1024)]
     last = ctx.pre.get("last_entry", "")                # read once, in prepare
     if last:
-        parts += ["", _banner("VAULT FILE: %s (last entry only)" % ctx.log_path) + last]
+        last_shown, last_over_kb = vault.for_injection(last)
+        parts += ["", _banner("VAULT FILE: %s (last entry only)" % ctx.log_path) + last_shown]
+        if last_over_kb:
+            parts += ["", "Brain: last log entry truncated at %d KB — trim it (/brain sync)" % (vault.INJECT_BYTE_CAP // 1024)]
     if os.path.exists(ctx.arch_path):
         parts += ["", "Tier 2 (read by section, on demand): " + ctx.arch_path]
     parts += _graph_lines(ctx)
+    if over_kb:
+        # Next to the health line, not only next to the cut: this is the actionable half —
+        # the file is too big and only /brain sync can shrink it.
+        parts += ["", "Brain: context.md oversize: %d KB" % over_kb]
     if deferred:
-        parts += ["", "Brain: code map deferred — this repo has %d+ tracked files, so codemap.md "
-                      "holds only the curated block for now. Run `%s map --regen` if you need the "
-                      "generated tree this session." % (codemap.LARGE_REPO_FILES, cli_command())]
+        # Two different states reach here: no generated block at all (a fresh stub), and a
+        # complete-but-stale one. Saying "holds only the curated block" in the second case is
+        # simply false — the map is there, it just predates the current tree. The flag comes
+        # from prepare; re-reading codemap.md here would be file I/O inside the lock.
+        what = ("codemap.md is stale — it describes an earlier commit" if ctx.pre.get("map_generated")
+                else "codemap.md holds only the curated block for now")
+        parts += ["", "Brain: code map deferred — this repo has %d+ tracked files, so %s. Run "
+                      "`%s map --regen` if you need the current generated tree this session."
+                  % (codemap.LARGE_REPO_FILES, what, cli_command())]
     if source in ("compact", "resume"):
         fm, _ = vault.parse_frontmatter(context_text)
         expected = fm.get("branch") or "unset"
@@ -554,20 +576,128 @@ def on_session_end(ctx):
 
 on_pre_compact.prepare = _prepare_pre_compact
 
-_PUSH_RE = re.compile(r"\bgit\s+push\b")
+# The cheap gate in front of the parser: a `git` token and, in the same segment, a later `push`
+# token. NOT `\bgit\s+push\b` — that required them to be adjacent, so every shape git itself
+# accepts a global option in (`git -c x=y push`, `git -C . push`, `git --no-pager push`,
+# `git -P push`, `git --work-tree=. push`) never reached `push_targets`, which has parsed those
+# correctly all along. The lookarounds exclude `-`, so `git-lfs` and `push-notify` are not `git`
+# and `push`; splitting on `[\n;|&]` keeps the two tokens inside one command.
+_GIT_TOKEN_RE = re.compile(r"(?<![\w-])git(?![\w-])")
+_PUSH_TOKEN_RE = re.compile(r"(?<![\w-])push(?![\w-])")
+_GATE_SPLIT_RE = re.compile(r"[\n;|&]")
+_CONTINUATION_RE = re.compile(r"\\\n[ \t]*")
 _MAIN_RULE_RE = re.compile(r"never\s+.*commit.*\bto\b.*\b(main|master)\b", re.I)
 _PUSH_VALUE_OPTS = ("-o", "--push-option", "--receive-pack", "--exec")
+# Options that push branches the command never names — the branch rules cannot be applied.
+_BROAD_PUSH_OPTS = ("--all", "--mirror", "--branches")
 # git global options that can appear before the `push` subcommand and would otherwise hide it.
 _GIT_GLOBAL_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")
 _GIT_GLOBAL_FLAG_OPTS = ("--no-pager", "-P", "--no-optional-locks")
 _REDIR_RE = re.compile(r"^\d*[<>]{1,2}(&\d+)?$")
-# Segment separators: `||` and `&&` first (so they are not split as two bare `|`/`&`), then
-# `;`, a bare `|` pipe, a bare `&` (backgrounding), and a newline — a multi-line Bash body
-# hides a push on its second line otherwise.
-_SEGMENT_RE = re.compile(r"\|\||&&|[;|&\n]")
 # `VAR=value` prefixes sit between the segment start and the command word, exactly like
 # env/command/sudo do: `GIT_SSH=x git push` is still a push.
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# Words that can stand between the start of a segment and the command word without changing
+# what the command is, and that take no arguments of their own. The shell keywords matter
+# because `if git push origin main; then …` and `while ! git push …; do …; done` are shapes an
+# agent writes unprompted — `if`/`while`/`until` sit in COMMAND position, so a segment starting
+# with one is a real command with a keyword bolted on the front.
+_WRAPPERS = ("then", "do", "else", "elif", "if", "while", "until", "{", "}", "!")
+# These take their OWN arguments before the command word (`timeout 30 …`, `sudo -u x …`,
+# `env -i …`), so stripping the wrapper word alone leaves `30 git push …` and the segment reads
+# as "not a git command". The parser skips ahead to the first token that could be the real
+# command word — a bare `git`, or an interpreter whose argument it can parse one level deep.
+_ARG_WRAPPERS = ("env", "command", "sudo", "nohup", "time", "timeout", "xargs")
+_SHELLS = ("bash", "sh", "zsh", "dash", "ksh")
+
+def _join_continuations(cmd):
+    r"""Fold a `\`-newline line continuation back into one line. `git \<newline>push origin main`
+    is one command to Bash, and both the gate and the segment splitter read a newline as a break."""
+    return _CONTINUATION_RE.sub(" ", cmd or "")
+
+def looks_like_push(cmd):
+    """Cheap "is this worth parsing at all" test, shared by the PreToolUse gate and its prepare
+    phase. Deliberately permissive — `push_targets` is what decides, and it returns [] for a
+    command that merely mentions a push."""
+    # Two linear token searches per separator-split segment. A single lazy regex spanning
+    # both tokens is quadratic on a long separator-free line, and this runs on every Bash call.
+    for seg in _GATE_SPLIT_RE.split(_join_continuations(cmd)):
+        m = _GIT_TOKEN_RE.search(seg)
+        if m and _PUSH_TOKEN_RE.search(seg, m.end()):
+            return True
+    return False
+
+def _mentions_push(text):
+    """`git` token followed later by a `push` token, linear time (see looks_like_push)."""
+    m = _GIT_TOKEN_RE.search(text or "")
+    return bool(m and _PUSH_TOKEN_RE.search(text, m.end()))
+# A segment that is a `git push` the parser cannot resolve to concrete branch names. It is a
+# TARGET, not a branch: `on_pre_tool_use` denies on it outright. The distinction matters — the
+# obvious "conservative fallback", the current branch, is exactly the value both deny rules
+# treat as permitted (`t != expected` is false when `branch:` frontmatter matches the checked-out
+# branch, which is what /brain sync writes), so returning it was behaviourally an ALLOW.
+UNPARSED = "<unparsed>"
+
+_SEPARATORS = ";|&\n()"
+
+def split_segments(cmd):
+    """Split a Bash command into command segments on UNQUOTED separators.
+
+    `||`/`&&` count as one separator each (not two bare `|`/`&`); `;`, a bare pipe, a bare `&`
+    (backgrounding), a newline — a multi-line body hides a push on its second line otherwise —
+    and `(`/`)`, so a subshell's or a `$(…)`'s body becomes its own segment.
+
+    Quote-aware, which a regex split cannot be: a plain `re.split` cut
+    `git push origin main --push-option="ref (x)"` in half at the paren INSIDE the quoted
+    argument, and the resulting half-segment no longer tokenised — turning a push the guard used
+    to catch into one it could not read.
+
+    Command substitution is the exception to that quote-awareness, and it has to be: `"` does not
+    suppress `$(…)` or a backtick in Bash, so `echo "$(git push origin main)"` and
+    `out="$(git push …)"` really do run the push. Those two open a segment whatever the quote
+    state (single quotes excepted — there they are literal), which is why `--push-option="ref (x)"`
+    survives: its paren has no `$` in front of it.
+    """
+    segs, buf, quote = [], [], ""
+    stack = []                          # ("(" or "`", quote state to restore on close)
+    i, n = 0, len(cmd or "")
+
+    def cut():
+        segs.append("".join(buf))
+        del buf[:]
+
+    while i < n:
+        ch = cmd[i]
+        escaped = i > 0 and cmd[i - 1] == "\\" and (i < 2 or cmd[i - 2] != "\\")
+        if quote != "'" and not escaped and cmd.startswith("$(", i):
+            cut(); stack.append(("(", quote)); quote = ""; i += 2; continue
+        if quote != "'" and not escaped and ch == "`":
+            cut()
+            if stack and stack[-1][0] == "`":
+                quote = stack.pop()[1]
+            else:
+                stack.append(("`", quote)); quote = ""
+            i += 1; continue
+        if quote == "" and ch == ")" and stack and stack[-1][0] == "(":
+            cut(); quote = stack.pop()[1]; i += 1; continue
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                buf.append(cmd[i + 1]); i += 2; continue     # \" inside "…" is a literal quote
+            if ch == quote:
+                quote = ""
+            i += 1; continue
+        if ch == "\\" and i + 1 < n:
+            buf.append(ch); buf.append(cmd[i + 1]); i += 2; continue
+        if ch in "'\"":
+            quote = ch; buf.append(ch); i += 1; continue
+        if cmd.startswith("||", i) or cmd.startswith("&&", i):
+            cut(); i += 2; continue
+        if ch in _SEPARATORS:
+            cut(); i += 1; continue
+        buf.append(ch); i += 1
+    cut()
+    return segs
 
 def _is_redir(t):
     return bool(_REDIR_RE.match(t)) or t in ("&>", "&>>")
@@ -599,17 +729,84 @@ def _strip_heredocs(cmd):
                 i = j + 1               # skip the body and its terminator
     return "\n".join(out)
 
-def push_targets(cmd, current_branch):
-    """Branch names a Bash command would push to. Parses real `git push` segments only (never quoted/echoed text)."""
+def _nested_payload(toks):
+    """The command string a segment hands to another interpreter, or None.
+
+    `bash -c '…'` (and `sh -lc '…'`, combined short flags included) and `eval …` both run their
+    argument as a command. `eval`'s arguments are concatenated by the shell, so joining them back
+    is the same string it would run — losing a layer of quoting, which can only cost a false DENY.
+    """
+    if not toks:
+        return None
+    if toks[0] == "eval":
+        return " ".join(toks[1:])
+    if os.path.basename(toks[0]) in _SHELLS:
+        for i, t in enumerate(toks[1:], 1):
+            if t.startswith("-") and not t.startswith("--") and "c" in t[1:]:
+                return toks[i + 1] if i + 1 < len(toks) else ""
+    return None
+
+def _is_command_word(t):
+    """Could this token be the command an arg-taking wrapper is about to run?"""
+    return t == "git" or t == "eval" or os.path.basename(t) in _SHELLS
+
+def push_targets(cmd, current_branch, _depth=0):
+    """Branch names a Bash command would push to. Parses real `git push` segments only (never
+    quoted/echoed text).
+
+    Two rules govern every judgement call below: a false DENY costs the user one confirmation,
+    a false ALLOW lets a forbidden push land. So a segment that is plainly a `git push` but whose
+    targets cannot be resolved yields `UNPARSED` rather than [] — `on_pre_tool_use` reads an
+    empty list as "not a push at all", and reads `UNPARSED` as "deny and say why".
+    """
     targets = []
-    for seg in _SEGMENT_RE.split(_strip_heredocs(cmd)):
+
+    def add(names):
+        for n in names:
+            if n and n not in targets:
+                targets.append(n)
+
+    for seg in split_segments(_strip_heredocs(_join_continuations(cmd))):
         try:
             toks = shlex.split(seg.strip(), comments=True)
         except ValueError:
+            # Unbalanced quotes the segment splitter could not keep together. Dropping the
+            # segment silently is exactly the false ALLOW this guard exists to prevent.
+            if _mentions_push(seg):
+                add([UNPARSED])
             continue
-        while toks and (toks[0] in ("env", "command", "sudo") or _ASSIGN_RE.match(toks[0])):
-            toks = toks[1:]
+        opaque = wrapped = False
+        while toks:
+            if toks[0] in _WRAPPERS or _ASSIGN_RE.match(toks[0]):
+                toks = toks[1:]; continue
+            if toks[0] in _ARG_WRAPPERS:
+                # Skip the wrapper AND its own arguments (`-u x`, `30`, `-i`) to the first token
+                # that could be the command it runs. Nothing else in the segment can be it, so
+                # a segment with no such token is opaque rather than "not a push".
+                nxt = next((i for i, t in enumerate(toks[1:], 1) if _is_command_word(t)), None)
+                if nxt is None:
+                    toks, opaque = [], True
+                else:
+                    toks, wrapped = toks[nxt:], True
+                    continue                    # the new head may be another wrapper
+            break
+        if opaque:
+            add([UNPARSED] if _mentions_push(seg) else [])
+            continue
+        payload = _nested_payload(toks)
+        if payload is not None:
+            # Exactly one level deep: the nested string is parsed as a command in its own right
+            # (so `bash -c 'git push origin main'` reports main, not a guess), and anything the
+            # nested parse cannot see through is unresolved — never "no push".
+            nested = push_targets(payload, current_branch, _depth + 1) if _depth < 1 else []
+            add(nested or ([UNPARSED] if _mentions_push(payload) else []))
+            continue
         if not toks or toks[0] != "git":
+            # `wrapped` means the first-candidate scan above picked the command word, and it was
+            # not a push after all — `sudo -u git git push …` picks the OPTION VALUE `git`. The
+            # scan cannot tell the two apart, so the segment is unresolved, not "no push".
+            if wrapped and _mentions_push(seg):
+                add([UNPARSED])
             continue
         idx = 1
         while idx < len(toks) and toks[idx] != "push":
@@ -622,8 +819,10 @@ def push_targets(cmd, current_branch):
                 idx += 1; continue
             break
         if idx >= len(toks) or toks[idx] != "push":
+            if wrapped and _mentions_push(seg):
+                add([UNPARSED])
             continue
-        positional, skip = [], False
+        positional, skip, broad = [], False, False
         for t in toks[idx + 1:]:
             if skip:
                 skip = False; continue
@@ -638,6 +837,10 @@ def push_targets(cmd, current_branch):
             if t in _PUSH_VALUE_OPTS:
                 skip = True; continue
             if t.startswith("-"):
+                # `--all`/`--mirror` push every local branch, `main` among them, without naming
+                # one. The "no refspec means the current branch" rule below is simply wrong for
+                # them, and wrong in the allow direction.
+                broad = broad or t in _BROAD_PUSH_OPTS
                 continue
             positional.append(t)
         refspecs = positional[1:] if positional else []
@@ -650,10 +853,8 @@ def push_targets(cmd, current_branch):
                 continue        # a tag push targets no branch; the branch-mismatch rule cannot apply
             names.append(dst[len("refs/heads/"):] if dst.startswith("refs/heads/") else dst)
         if not refspecs:
-            names.append(current_branch)
-        for n in names:
-            if n and n not in targets:
-                targets.append(n)
+            names.append(UNPARSED if broad else current_branch)
+        add(names)
     return targets
 
 def _prepare_pre_tool_use(ctx):
@@ -661,7 +862,7 @@ def _prepare_pre_tool_use(ctx):
     PreToolUse fires on every matching tool call, so its locked body must stay trivial."""
     ti = ctx.payload.get("tool_input") or {}
     tool = str(ctx.payload.get("tool_name") or "")
-    if tool == "Bash" and _PUSH_RE.search(str(ti.get("command") or "")):
+    if tool == "Bash" and looks_like_push(str(ti.get("command") or "")):
         return {"branch": gitinfo.current_branch(ctx.cwd)}
     if tool in ("Grep", "Glob"):
         term = _search_term(str(ti.get("pattern") or ""))
@@ -687,11 +888,16 @@ def on_pre_tool_use(ctx):
     tool = str(ctx.payload.get("tool_name") or ""); ti = ctx.payload.get("tool_input") or {}
     if tool == "Bash":
         cmd = str(ti.get("command") or "")
-        if not _PUSH_RE.search(cmd):
+        if not looks_like_push(cmd):
             return EMPTY
         targets = push_targets(cmd, ctx.pre.get("branch", ""))
         if not targets:
             return EMPTY
+        if UNPARSED in targets:
+            # Checked BEFORE the two branch rules, which compare against the expected branch and
+            # would let this through the moment the sentinel happened to look permitted.
+            return _deny("Brain: could not parse the push target — run the push as a plain "
+                         "`git push <remote> <branch>` so the branch rules can be checked.")
         text = vault.read(ctx.context_path); fm, _ = vault.parse_frontmatter(text)
         expected = fm.get("branch", "")
         bad = [t for t in targets if expected and t != expected]

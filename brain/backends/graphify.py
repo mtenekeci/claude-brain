@@ -50,8 +50,8 @@ def graph_json(project_dir):
 
 
 def source_key(project_dir):
-    """Content key for the graph, computed without parsing it. Matches the `sha` that
-    `code_layer` puts on the layer it returns — both are md5 over the same bytes."""
+    """Content key for the graph, computed without reading it. Matches the `sha` that
+    `code_layer` puts on the layer it returns — both are `backends.digest` of the same file."""
     return backends.digest(graph_json(project_dir), "graphify:")
 
 

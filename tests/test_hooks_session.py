@@ -217,9 +217,28 @@ class LargeRepoDeferralTests(unittest.TestCase):
     def test_deferred_code_map_is_announced_in_the_injection(self):
         (out,), calls = self._session_starts("startup")
         self.assertIn("Brain: code map deferred", out)
+        self.assertIn("holds only the curated block", out)
         self.assertIn("map --regen", out)
         self.assertEqual(len(calls), 1)
         self.assertTrue(state.SessionState.load("s1").codemap_stale)
+
+    def test_a_stale_but_complete_code_map_is_not_described_as_empty(self):
+        """Deferral fires for both an empty stub and a generated block that predates the tree.
+        Telling the user the file 'holds only the curated block' is false in the second case."""
+        self._session_starts("startup")                     # writes the stub codemap.md
+        cm = os.path.join(self.pdir, "codemap.md")
+        _, _, curated = hooks.codemap.split_codemap(read_text(cm))
+        with open(cm, "w", encoding="utf-8") as f:
+            f.write(hooks.codemap.gen_start("an-older-commit") + "\nsrc/f0000.ts\n" + hooks.codemap.GEN_END + "\n\n" + curated)
+        calls = []
+        orig_popen = stub_popen(calls)                      # a fresh session id would spawn for real
+        try:
+            out = hooks.dispatch("SessionStart", payload("SessionStart", self.repo, session_id="s2")).stdout
+        finally:
+            hooks.subprocess.Popen = orig_popen
+        self.assertIn("Brain: code map deferred", out)
+        self.assertIn("codemap.md is stale", out)
+        self.assertNotIn("holds only the curated block", out)
 
     def test_compact_and_resume_do_not_each_spawn_a_build(self):
         outs, calls = self._session_starts("startup", "compact", "resume")

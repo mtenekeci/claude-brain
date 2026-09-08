@@ -59,6 +59,32 @@ def set_frontmatter(text, key, value):
         block = block + "\n%s: %s" % (key, value)
     return "---\n%s\n---\n" % block + text[m.end():]
 
+# The two budgets a vault note injected at SessionStart has to respect.
+#
+# CONTEXT_LINE_CAP is the documented, advisory one — `/brain sync` reports it and asks the
+# model to compress. INJECT_BYTE_CAP is the hard one, and it exists because lines are a
+# terrible proxy for size: a real project's context.md measured 81 KB in 128 lines (very long
+# lines), passed the line cap, and its 86 KB injection buried the migration, graph and health
+# lines that follow it. Bytes are what actually costs context, so bytes are what is enforced.
+CONTEXT_LINE_CAP = 150
+INJECT_BYTE_CAP = 16 * 1024
+
+def for_injection(text, cap=INJECT_BYTE_CAP):
+    """(text_to_inject, over_kb). `over_kb` is 0 when the note fits and its whole size in KB
+    when it does not, so the caller can both mark the cut and name the file to trim.
+
+    The cut lands on the last `## ` section boundary that fits — a half-section reads as a
+    complete one — falling back to the last whole line when there is no heading to cut at.
+    """
+    data = (text or "").encode("utf-8")
+    if len(data) <= cap:
+        return text, 0
+    head = data[:cap].decode("utf-8", "ignore")
+    idx = head.rfind("\n## ")
+    if idx <= 0:
+        idx = head.rfind("\n")
+    return (head[:idx + 1] if idx > 0 else head), len(data) // 1024
+
 _FENCE_MARKS = ("```", "~~~")
 
 def _heading_starts(text):
@@ -182,7 +208,12 @@ def atomic_write(path, text):
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:     # fdopen owns fd and closes it
+        try:
+            f = os.fdopen(fd, "w", encoding="utf-8")        # from here the file object owns fd
+        except BaseException:
+            os.close(fd)                                    # fdopen failed, so nothing else owns fd
+            raise
+        with f:
             f.write(text)
         try:
             mode = stat.S_IMODE(os.stat(path).st_mode)      # rewrite: keep the note's own bits

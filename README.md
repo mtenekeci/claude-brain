@@ -73,12 +73,18 @@ Session start is budgeted; the point is a briefing, not a document dump.
 | At | What | Budget |
 |---|---|---|
 | SessionStart | The write protocol | ≤ 25 lines |
-| SessionStart | `context.md`, verbatim | ≤ 150 lines (enforced by `/brain sync`) |
-| SessionStart | The last `log.md` entry only | one entry |
+| SessionStart | `context.md`, verbatim | ≤ 150 lines (advisory, reported by `/brain sync`) and ≤ 16 KB (hard) |
+| SessionStart | The last `log.md` entry only | one entry, ≤ 16 KB |
 | SessionStart | Most-connected graph nodes + a concept-health line | ≤ 12 nodes, ≤ 45 lines total |
 | Each prompt | Graph hits for terms in the prompt | ≤ 3 nodes, ≤ 20 lines |
 | Grep/Glob | "graph already knows" hint | ≤ 9 lines |
 | Subagent start | Project identity + Hard Rules | ≤ 14 lines |
+
+The line cap is advisory; the **byte** cap is enforced, because lines are a poor proxy for
+size — a `context.md` of 128 very long lines can be 80 KB and pass the line cap. When a note
+is over 16 KB the injection is cut at the last section boundary that fits and says so
+(`Brain: context.md truncated at 16 KB — trim it (/brain sync)`); `/brain status` and
+`/brain sync` report the file's real size (`context.md oversize: <N> KB`).
 
 `architecture.md` is **not** injected. It is read on demand, by section — `graph near <id>`
 names the section and line to read.
@@ -129,6 +135,19 @@ Configuration lives in one file, `~/.claude/brain.config`. Change it with
 
 The gate blocks a turn at most once, and never inside a subagent. A turn that ends in a
 question to the user is never soft-blocked.
+
+## The push guard
+
+A `git push` whose target branch is not the one `context.md` records — or is `main`/`master` when
+the project's Hard Rules forbid it — is denied at `PreToolUse` with an explanation. The command is
+parsed rather than pattern-matched, so a push wrapped in a shell keyword, a subshell, a command
+substitution, `sudo`/`env`/`timeout`, or a one-level `bash -c` is still seen; a push it cannot
+resolve to concrete branches is denied too, with a note asking for a plain
+`git push <remote> <branch>`.
+
+It is a speed bump against pushes made by habit, not a sandbox: a shell fed on stdin
+(`printf '…' | sh`), a heredoc body, or a push inside a script file all run outside its reach, and
+nothing about it should be relied on as a security boundary.
 
 ## How the graph works
 
@@ -187,7 +206,9 @@ three or more source files and no `## Modules` row yet.
 The graph is cached per project under `<vault>/projects/<slug>/.brain/` and rebuilt whenever
 any input file changes. On a repository with 3000 or more tracked files, session start writes
 the curated scaffold and defers the generated layer to a background `map --regen`, so the
-session-start budget is never at risk; the injection says so when this happens.
+session-start budget is not spent on it; the injection says so when this happens. With
+`async_regen: off` there is no background process to defer to, so that build runs in the
+foreground instead — still bounded by the same file-count limit.
 
 ## Migration from v1
 
@@ -209,11 +230,18 @@ Two things to expect once:
   are still registered in `.claude/settings.json` when the session begins, so both the v1
   script and the v2 plugin hook fire. Migration strips the old entries during that same
   session; every session after it is clean.
-- **Leftover scripts.** v1 copied hook scripts to `~/.claude/brain-*.sh`. `/brain status`
-  lists any that remain, marking which are still referenced by some project.
-  `/brain status --clean-orphans` deletes only the unreferenced ones.
+- **Leftover scripts.** v1 copied four hook scripts to `~/.claude/`
+  (`brain-session-start.sh`, `brain-post-tool-use.sh`, `brain-precompact.sh`,
+  `brain-session-end.sh`). `/brain status` lists any that remain, marking which are still
+  referenced by a project or by your own `settings.json`; `/brain status --clean-orphans`
+  deletes only the unreferenced ones. Those four names are the only files it will ever touch —
+  anything else you keep at `~/.claude/brain-*.sh` is yours.
 
-Vault content is never touched by migration.
+Migration itself rewrites nothing in the vault except the `path:` field above. Separately —
+not part of migration — the first v2 session runs the concept lint, which auto-applies up to
+five manifest-dependency links: a `uses::` line in `context.md`'s `## Architecture` and a
+`## Used by` row in the matching concept note. It says so in the health line, and
+`/brain graph dismiss <slug>` stops any of them coming back.
 
 ## graphify (optional)
 

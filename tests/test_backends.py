@@ -142,7 +142,9 @@ class GraphifyLayerTests(BackendFixture):
         self.assertEqual(byp["src/auth/session.ts"]["imports"], ["src/auth/verify.ts", "src/db.ts"])
         self.assertEqual(byp["src/db.ts"]["imports"], [])                   # `contains` is not an import
         self.assertTrue(all(f["lines"] == 0 for f in layer["files"]))
-        self.assertTrue(layer["sha"].startswith("graphify:")); self.assertEqual(len(layer["sha"]), len("graphify:") + 8)
+        # the sha is backends.digest of graph.json: "<prefix><mtime_ns>-<size>", not a hash
+        self.assertTrue(layer["sha"].startswith("graphify:"))
+        self.assertEqual(layer["sha"], backends.source_key(self.repo, self.pdir)[1])
         self.assertIn("pg", layer["deps"])                                  # manifest deps still come from the repo
 
     def test_layer_caps_symbols_and_imports(self):

@@ -27,9 +27,15 @@ def _run(argv):
     return cli.run(argv)
 
 def main(argv=None):
-    """Never raise and never emit anything Claude Code would surface: any failure below
-    the dispatch layer (unreadable stdin, broken config, import error) is logged and
-    exits 0 silently. The hook contract is 'silent unless it has something to say'."""
+    """Never raise. What a crash *means*, though, differs by path:
+
+    - `hook <Event>`: silent, exit 0. Any failure below the dispatch layer (unreadable stdin,
+      broken config, import error) is logged and swallowed — the hook contract is "silent
+      unless it has something to say", and a nonzero exit would surface in the session.
+    - a CLI subcommand: the contract is 0 (ok) / 1 (refused) / 2 (not configured). Reporting a
+      crash as 0 tells the caller — a user, or the skill — that the command succeeded.
+    """
+    is_hook = bool(argv is None and sys.argv[1:2] == ["hook"]) or bool(argv and list(argv)[:1] == ["hook"])
     try:
         return _run(argv)
     except Exception as e:
@@ -38,7 +44,10 @@ def main(argv=None):
             config.log_error("main: %r" % e)
         except Exception:
             pass
-        return 0
+        if is_hook:
+            return 0
+        sys.stderr.write("brain: %s\n" % e)
+        return 1
 
 if __name__ == "__main__":
     sys.exit(main())

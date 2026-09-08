@@ -6,7 +6,7 @@ the locked body turns a 1 ms critical section into a multi-second one, so each h
 does that work in its `prepare(ctx)` phase, which `dispatch()` runs BEFORE `state.locked()`.
 
 This test asserts the invariant directly: it flags the lock as held, then fails if any
-of the five expensive entry points is reached while the flag is set. `subprocess.Popen` is
+of the six expensive entry points is reached while the flag is set. `subprocess.Popen` is
 one of them: it covers the detached `map --regen` spawn AND (through subprocess.run) every
 git call, so a stray subprocess anywhere in a locked body is caught here.
 """
@@ -35,10 +35,11 @@ class LockDisciplineTests(unittest.TestCase):
         self.tmp.cleanup(); os.environ.clear(); os.environ.update(self._env)
 
     def _instrument(self):
-        """Wrap state.locked + the five expensive entry points. Returns a restore callable."""
+        """Wrap state.locked + the six expensive entry points. Returns a restore callable."""
         originals = [(hooks.state, "locked", hooks.state.locked), (graph, "load", graph.load),
                      (gitinfo, "_git", gitinfo._git), (codemap, "list_files", codemap.list_files),
-                     (lint, "run", lint.run), (hooks.subprocess, "Popen", hooks.subprocess.Popen)]
+                     (lint, "run", lint.run), (state, "prune", state.prune),
+                     (hooks.subprocess, "Popen", hooks.subprocess.Popen)]
 
         def guard(name, fn):
             def wrapped(*a, **k):

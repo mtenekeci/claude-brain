@@ -1,32 +1,29 @@
 """Code-layer backends. `builtin` is the generated codemap layer; `graphify` reads a graph an
 external `/graphify` run already produced. Selection is config-driven and always degrades to
 builtin — a backend that cannot be read is a logged fallback, never an error."""
-import hashlib, os
+import os
 
 from brain import codemap, config
 
 BUILTIN = "builtin"
 GRAPHIFY = "graphify"
-_CHUNK = 1 << 16
 
 
 def digest(path, prefix):
-    """'<prefix><md5 of the file bytes>[:8]', '' when the file is missing/unreadable.
+    """'<prefix><mtime_ns>-<size>', '' when the file is missing/unreadable.
 
-    Streamed and parse-free on purpose: this runs on `graph.load`'s cache-HIT path, where
-    parsing the layer would be exactly the cost the cache exists to avoid.
+    A cache key, not a checksum. It runs on `graph.load`'s cache-HIT path — which is the
+    UserPromptSubmit path, once per prompt — so it must not read the file at all: hashing a
+    large `graphify-out/graph.json` here was a per-prompt tax on exactly the case the cache
+    exists to make free. `(st_mtime_ns, st_size)` changes whenever a rewrite does, which is all
+    a staleness check needs; the cost of the rare miss it cannot see (a byte-identical-length
+    rewrite within one mtime tick) is one stale graph until the next input changes.
     """
-    h = hashlib.md5()
     try:
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(_CHUNK)
-                if not chunk:
-                    break
-                h.update(chunk)
+        st = os.stat(path)
     except OSError:
         return ""
-    return prefix + h.hexdigest()[:8]
+    return "%s%d-%d" % (prefix, st.st_mtime_ns, st.st_size)
 
 
 def select(project_dir):
