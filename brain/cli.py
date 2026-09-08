@@ -213,7 +213,10 @@ def _cmd_sync_prepare(args):
     n_entries = vault.count_log_entries(log_text)
     placeholder = vault.last_entry_is_placeholder(log_text)
     print("slug: %s" % proj.slug)
-    print("context.md: %d lines (cap 150)" % len(ctx_text.splitlines()))
+    print("context.md: %d lines (cap %d)" % (len(ctx_text.splitlines()), vault.CONTEXT_LINE_CAP))
+    over_kb = vault.for_injection(ctx_text)[1]
+    if over_kb:
+        print("context.md oversize: %d KB (SessionStart truncates the injection at %d KB)" % (over_kb, vault.INJECT_BYTE_CAP // 1024))
     print("last log entry: Session %d [%s]" % (n_entries, "placeholder" if placeholder else "real"))
     print("next session: %d" % (n_entries if placeholder else n_entries + 1))
     from brain import gitinfo
@@ -251,8 +254,8 @@ def _cmd_sync_finish(args):
     codemap.regenerate(proj.project_dir, pdir)
     graph.load(vault_root, proj.slug, proj.project_dir, force=True)
     n_lines = len(vault.read(ctx_path).splitlines())
-    print("context.md: %d lines (cap 150)" % n_lines)
-    if n_lines > 150:
+    print("context.md: %d lines (cap %d)" % (n_lines, vault.CONTEXT_LINE_CAP))
+    if n_lines > vault.CONTEXT_LINE_CAP:
         print("WARNING: over cap — compress ## Decisions beyond the 5 most recent")
     print("Brain synced: %s" % proj.slug)
     return 0
@@ -353,7 +356,10 @@ def _cmd_status(args):
     print("Backend: %s" % backend)
     print("Updated: %s" % fm.get("updated", "?"))
     print("Sessions: %d" % vault.count_log_entries(log_text))
-    print("Context size: %d / 150 lines" % len(ctx_text.splitlines()))
+    print("Context size: %d / %d lines" % (len(ctx_text.splitlines()), vault.CONTEXT_LINE_CAP))
+    over_kb = vault.for_injection(ctx_text)[1]
+    if over_kb:
+        print("context.md oversize: %d KB (SessionStart truncates the injection at %d KB — trim it with /brain sync)" % (over_kb, vault.INJECT_BYTE_CAP // 1024))
     print("Hooks: plugin-shipped (%d events)" % n_hooks)
     print("Codemap: %s" % codemap_status)
     print("Graph: %d nodes, %d edges (cache %ds old)" % (len(g.nodes), len(g.edges), age))

@@ -73,12 +73,18 @@ Session start is budgeted; the point is a briefing, not a document dump.
 | At | What | Budget |
 |---|---|---|
 | SessionStart | The write protocol | ≤ 25 lines |
-| SessionStart | `context.md`, verbatim | ≤ 150 lines (enforced by `/brain sync`) |
-| SessionStart | The last `log.md` entry only | one entry |
+| SessionStart | `context.md`, verbatim | ≤ 150 lines (advisory, reported by `/brain sync`) and ≤ 16 KB (hard) |
+| SessionStart | The last `log.md` entry only | one entry, ≤ 16 KB |
 | SessionStart | Most-connected graph nodes + a concept-health line | ≤ 12 nodes, ≤ 45 lines total |
 | Each prompt | Graph hits for terms in the prompt | ≤ 3 nodes, ≤ 20 lines |
 | Grep/Glob | "graph already knows" hint | ≤ 9 lines |
 | Subagent start | Project identity + Hard Rules | ≤ 14 lines |
+
+The line cap is advisory; the **byte** cap is enforced, because lines are a poor proxy for
+size — a `context.md` of 128 very long lines can be 80 KB and pass the line cap. When a note
+is over 16 KB the injection is cut at the last section boundary that fits and says so
+(`Brain: context.md truncated at 16 KB — trim it (/brain sync)`); `/brain status` and
+`/brain sync` report the file's real size (`context.md oversize: <N> KB`).
 
 `architecture.md` is **not** injected. It is read on demand, by section — `graph near <id>`
 names the section and line to read.

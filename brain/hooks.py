@@ -280,13 +280,25 @@ def on_session_start(ctx):
     if not context_text:
         msg = "Brain: project '%s' has no context.md at %s — run /brain init.\n" % (ctx.project.slug, ctx.pdir)
         return HookResult(migrated_line + "\n" + msg if migrated_line else msg, after_lock=after_lock)
-    parts.append(_banner("VAULT FILE: " + ctx.context_path) + context_text.rstrip("\n"))
+    # Bytes, not lines: an 81 KB context.md in 128 lines passes the line cap and then buries
+    # every line below it — the graph hints, the health line, the migration notice.
+    shown, over_kb = vault.for_injection(context_text)
+    parts.append(_banner("VAULT FILE: " + ctx.context_path) + shown.rstrip("\n"))
+    if over_kb:
+        parts += ["", "Brain: context.md truncated at %d KB — trim it (/brain sync)" % (vault.INJECT_BYTE_CAP // 1024)]
     last = ctx.pre.get("last_entry", "")                # read once, in prepare
     if last:
-        parts += ["", _banner("VAULT FILE: %s (last entry only)" % ctx.log_path) + last]
+        last_shown, last_over_kb = vault.for_injection(last)
+        parts += ["", _banner("VAULT FILE: %s (last entry only)" % ctx.log_path) + last_shown]
+        if last_over_kb:
+            parts += ["", "Brain: last log entry truncated at %d KB — trim it (/brain sync)" % (vault.INJECT_BYTE_CAP // 1024)]
     if os.path.exists(ctx.arch_path):
         parts += ["", "Tier 2 (read by section, on demand): " + ctx.arch_path]
     parts += _graph_lines(ctx)
+    if over_kb:
+        # Next to the health line, not only next to the cut: this is the actionable half —
+        # the file is too big and only /brain sync can shrink it.
+        parts += ["", "Brain: context.md oversize: %d KB" % over_kb]
     if deferred:
         parts += ["", "Brain: code map deferred — this repo has %d+ tracked files, so codemap.md "
                       "holds only the curated block for now. Run `%s map --regen` if you need the "
