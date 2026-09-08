@@ -124,18 +124,27 @@ class SessionStartGraphTests(unittest.TestCase):
         tail = r.stdout.split("(last entry only)")[-1]
         self.assertLessEqual(tail.count("\n"), 45 + 6)                             # +6 for the fixture log entry lines
 
-    def test_large_repo_defers_regeneration(self):
+    def test_large_repo_writes_a_stub_instead_of_building(self):
+        """At LARGE_REPO_FILES the synchronous build is skipped entirely: the user gets the
+        curated scaffold with an empty generated block, and the detached --force regen fills it."""
         write_config(self.tmp.name, self.vault, extra={"async_regen": True})
-        calls = []
-        orig_fc = hooks.codemap.file_count
-        hooks.codemap.file_count = lambda d: 5000
+        calls, builds = [], []
+        orig_lf, orig_build = hooks.codemap.list_files, hooks.codemap.build_layer
+        hooks.codemap.list_files = lambda d: ["src/f%04d.ts" % i for i in range(4000)]
+        hooks.codemap.build_layer = lambda *a, **k: builds.append(a) or orig_build(*a, **k)
         orig_popen = stub_popen(calls)
         try:
             hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         finally:
-            hooks.codemap.file_count, hooks.subprocess.Popen = orig_fc, orig_popen
+            hooks.codemap.list_files, hooks.codemap.build_layer = orig_lf, orig_build
+            hooks.subprocess.Popen = orig_popen
+        self.assertEqual(builds, [])                                       # no synchronous full build
         self.assertEqual(len(calls), 1); self.assertIn("--regen", calls[0][0]); self.assertIn("--force", calls[0][0])
         self.assertTrue(state.SessionState.load("s1").codemap_stale)
+        cm = open(os.path.join(self.pdir, "codemap.md"), encoding="utf-8").read()
+        sha, gen, curated = hooks.codemap.split_codemap(cm)
+        self.assertEqual((sha, gen.strip()), ("", ""))                     # empty generated block
+        self.assertIn("## Modules", curated)                               # curated template present
 
     def test_heavy_work_runs_before_the_lock(self):
         order = []

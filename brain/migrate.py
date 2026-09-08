@@ -107,7 +107,13 @@ def migrate_project(proj, vault_root, project_dir):
         actions.append("path")
     try:
         from brain import codemap            # Plan 2
-        if codemap.ensure(project_dir, project.vault_project_dir(vault_root, proj.slug)):
+        pdir = project.vault_project_dir(vault_root, proj.slug)
+        files = codemap.list_files(project_dir)
+        # Same size guard as the SessionStart path: a huge repo gets the scaffold now and the
+        # generated block later, never a multi-second build inside the migration.
+        made = (codemap.ensure_stub(project_dir, pdir) if len(files) >= codemap.LARGE_REPO_FILES
+                else codemap.ensure(project_dir, pdir, files=files))
+        if made:
             actions.append("codemap")
     except ImportError:
         pass

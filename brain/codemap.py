@@ -8,6 +8,9 @@ MANIFESTS = ("package.json", "pyproject.toml", "requirements.txt", "go.mod", "Ca
 EXCLUDE_DIRS = ("node_modules", ".git", "dist", "build", "target", ".venv", "venv", "vendor", "__pycache__",
                 ".next", "coverage", ".brain")
 MAX_SYMBOLS = 8
+# At or above this many tracked files, callers on the SessionStart path write a stub and let a
+# detached `map --regen --force` do the real build — a synchronous one costs seconds.
+LARGE_REPO_FILES = 3000
 
 def _keep(rel):
     parts = rel.split("/")
@@ -169,8 +172,35 @@ def fingerprint(project_dir):
     except (OSError, subprocess.SubprocessError):
         return ""
 
-def build_layer(project_dir):
-    files = list_files(project_dir)
+def content_key(project_dir, files=None):
+    """Freshness key for a tree git cannot fingerprint: md5 over 'path:size:mtime_ns' lines.
+
+    Without it `regenerate()` sees an empty fingerprint on a non-git repo and rebuilds on
+    every call. '' when there is nothing to hash — the caller reports that as unknown.
+    """
+    import hashlib
+    try:
+        files = list_files(project_dir) if files is None else files
+    except OSError:
+        return ""
+    h, seen = hashlib.md5(), False
+    for rel in sorted(files):
+        try:
+            st = os.stat(os.path.join(project_dir, rel))
+        except OSError:
+            continue
+        h.update(("%s:%d:%d\n" % (rel, st.st_size, st.st_mtime_ns)).encode("utf-8"))
+        seen = True
+    return "nogit:" + h.hexdigest()[:16] if seen else ""
+
+def freshness_key(project_dir, files=None):
+    """The git fingerprint when there is one, else the content key. '' when neither exists."""
+    return fingerprint(project_dir) or content_key(project_dir, files)
+
+def build_layer(project_dir, files=None):
+    """`files` is a precomputed list_files() result — SessionStart passes it so `git ls-files`
+    runs once per event instead of once per codemap entry point."""
+    files = list_files(project_dir) if files is None else files
     fileset = set(files)
     gomod = go_module(project_dir)
     entries = []
@@ -181,7 +211,7 @@ def build_layer(project_dir):
         text = _read(os.path.join(project_dir, rel))
         entries.append({"path": rel, "lines": text.count("\n") + (1 if text and not text.endswith("\n") else 0),
                         "symbols": extract_symbols(text, ext), "imports": extract_imports(rel, text, fileset, gomod)})
-    return {"sha": fingerprint(project_dir), "files": entries, "deps": manifest_deps(project_dir), "generated_at": int(time.time())}
+    return {"sha": freshness_key(project_dir, files), "files": entries, "deps": manifest_deps(project_dir), "generated_at": int(time.time())}
 
 def _brain_dir(pdir):
     d = os.path.join(pdir, ".brain")
@@ -203,7 +233,8 @@ def read_layer(pdir):
         return None
 
 TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "codemap.md")
-GEN_START_RE = re.compile(r"<!-- brain:generated:start sha=([0-9a-f:]*) -->\n?")
+# `\S*` not `[0-9a-f:]*`: the freshness key is a git fingerprint OR a "nogit:<hex>" content key.
+GEN_START_RE = re.compile(r"<!-- brain:generated:start sha=(\S*) -->\n?")
 GEN_END = "<!-- brain:generated:end -->"
 
 def gen_start(sha):
@@ -272,36 +303,49 @@ def file_count(project_dir):
 def _codemap_path(pdir):
     return os.path.join(pdir, "codemap.md")
 
-def ensure(project_dir, pdir):
+def _write_codemap(path, text):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+def ensure(project_dir, pdir, files=None):
     path = _codemap_path(pdir)
     if os.path.exists(path):
         return False
-    layer = build_layer(project_dir)
+    layer = build_layer(project_dir, files)
     write_layer(pdir, layer)
-    slug = os.path.basename(pdir.rstrip("/"))
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(render_codemap(layer, curated_template(slug)))
-    os.replace(tmp, path)
+    _write_codemap(path, render_codemap(layer, curated_template(os.path.basename(pdir.rstrip("/")))))
     return True
 
-def regenerate(project_dir, pdir, force=False):
+def ensure_stub(project_dir, pdir):
+    """Curated template + an EMPTY generated block (markers with `sha=` blank, no tree).
+
+    For a repo too large to walk on the SessionStart path: the user gets the curated
+    scaffold immediately and the detached `map --regen --force` fills the block in.
+    An empty `sha=` never equals a real freshness key, so the next regenerate rebuilds.
+    """
+    path = _codemap_path(pdir)
+    if os.path.exists(path):
+        return False
+    os.makedirs(pdir, exist_ok=True)
+    _write_codemap(path, gen_start("") + "\n" + GEN_END + "\n\n" + curated_template(os.path.basename(pdir.rstrip("/"))))
+    return True
+
+def regenerate(project_dir, pdir, force=False, files=None):
     path = _codemap_path(pdir)
     if not os.path.exists(path):
-        return ensure(project_dir, pdir)
+        return ensure(project_dir, pdir, files)
     text = _read(path)
     stored_sha, _, curated = split_codemap(text)
-    current = fingerprint(project_dir)
+    current = freshness_key(project_dir, files)
     if not force and current and current == stored_sha:
         return False
-    layer = build_layer(project_dir)
+    layer = build_layer(project_dir, files)
     write_layer(pdir, layer)
     if not curated.strip():
         curated = curated_template(os.path.basename(pdir.rstrip("/")))
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(render_codemap(layer, curated))
-    os.replace(tmp, path)
+    _write_codemap(path, render_codemap(layer, curated))
     return True
 
 def _split_cells(line):

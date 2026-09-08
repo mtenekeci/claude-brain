@@ -56,9 +56,15 @@ def _map(args):
         return 0
     layer = codemap.read_layer(pdir)
     stored = (layer or {}).get("sha", "")
-    current = codemap.fingerprint(proj.project_dir)
+    current = codemap.freshness_key(proj.project_dir)
+    if not current:
+        status = "unknown (not a git repo)"      # no HEAD and nothing to hash — cannot compare
+    elif current != stored:
+        status = "stale — run map --regen"
+    else:
+        status = "fresh"
     if not args.quiet:
-        print("codemap: %s (%d files, head %s)" % ("stale — run map --regen" if current and current != stored else "fresh", len((layer or {}).get("files", [])), (stored or "-")[:7]))
+        print("codemap: %s (%d files, head %s)" % (status, len((layer or {}).get("files", [])), (stored or "-")[:7]))
     return 0
 
 

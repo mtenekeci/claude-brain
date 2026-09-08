@@ -171,6 +171,35 @@ class CodemapRenderTests(unittest.TestCase):
         self.assertTrue(codemap.regenerate(self.repo, self.pdir, force=True))
         self.assertGreater(codemap.file_count(self.repo), 5)
 
+    def test_non_git_tree_uses_a_content_freshness_key(self):
+        """Without git, fingerprint() is empty and regenerate() would rebuild on every call."""
+        with tempfile.TemporaryDirectory() as t:
+            src = os.path.realpath(t)
+            os.makedirs(os.path.join(src, "src"))
+            with open(os.path.join(src, "src", "a.ts"), "w") as f: f.write("export function a() {}\n")
+            pdir = os.path.join(self.vault, "projects", "nogit"); os.makedirs(pdir)
+            self.assertEqual(codemap.fingerprint(src), "")
+            key = codemap.freshness_key(src)
+            self.assertTrue(key.startswith("nogit:")); self.assertEqual(len(key), len("nogit:") + 16)
+            self.assertTrue(codemap.regenerate(src, pdir))          # first: builds
+            self.assertFalse(codemap.regenerate(src, pdir))         # second: content unchanged
+            self.assertFalse(codemap.regenerate(src, pdir))         # third: still unchanged
+            with open(os.path.join(src, "src", "b.ts"), "w") as f: f.write("export function b() {}\n")
+            self.assertTrue(codemap.regenerate(src, pdir))          # new file → new key → rebuild
+            self.assertIn("src/b.ts", open(os.path.join(pdir, "codemap.md"), encoding="utf-8").read())
+            self.assertEqual(codemap.freshness_key(os.path.join(src, "empty")), "")   # nothing to hash
+
+    def test_ensure_stub_writes_an_empty_generated_block(self):
+        pdir = os.path.join(self.vault, "projects", "stub"); os.makedirs(pdir)
+        self.assertTrue(codemap.ensure_stub(self.repo, pdir))
+        self.assertFalse(codemap.ensure_stub(self.repo, pdir))       # idempotent
+        text = open(os.path.join(pdir, "codemap.md"), encoding="utf-8").read()
+        sha, gen, curated = codemap.split_codemap(text)
+        self.assertEqual((sha, gen.strip()), ("", ""))
+        self.assertIn("## Modules", curated)
+        self.assertTrue(codemap.regenerate(self.repo, pdir))         # empty sha never matches → fills in
+        self.assertIn("src/auth/session.ts", open(os.path.join(pdir, "codemap.md"), encoding="utf-8").read())
+
     def test_regenerate_tolerates_missing_codemap(self):
         self.assertTrue(codemap.regenerate(self.repo, self.pdir, force=True))
         self.assertTrue(os.path.exists(os.path.join(self.pdir, "codemap.md")))

@@ -6,7 +6,7 @@ from brain import briefing, codemap, config, graph, project, retrieve, state, va
 PROTOCOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "protocol.md")
 _SOFT_EDIT_THRESHOLD = 5        # soft-tier Stop gate: uncommitted source edits before nudging
 _INJECTED_CAP = 300             # bound on ctx.state.injected — a long session must not grow this file forever
-from brain.codemap import SOURCE_EXTS
+SOURCE_EXTS = codemap.SOURCE_EXTS
 
 class HookResult(object):
     def __init__(self, stdout="", json=None, exit_code=0):
@@ -105,7 +105,7 @@ def _spawn_regen(ctx, force=False):
         subprocess.Popen(argv, cwd=ctx.project.project_dir,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
-    except OSError as e:
+    except Exception as e:      # Popen can raise more than OSError (bad argv types, ValueError)
         config.log_error("spawn regen failed: %r" % e)
         return False
     ctx.state.last_regen_spawn_at = now
@@ -128,22 +128,33 @@ def _prepare_session_start(ctx):
     except Exception as e:      # migration must never suppress injection
         config.log_error("migration failed for %s: %r" % (ctx.project.slug, e))
     try:
-        codemap.ensure(ctx.project.project_dir, ctx.pdir)
-        pre["large"] = codemap.file_count(ctx.project.project_dir) >= 3000
-        if not pre["large"]:
-            codemap.regenerate(ctx.project.project_dir, ctx.pdir)
+        # One `git ls-files` for the whole event: the size check, ensure() and regenerate()
+        # all read this list instead of walking the tree again.
+        files = codemap.list_files(ctx.project.project_dir)
+        pre["large"] = len(files) >= codemap.LARGE_REPO_FILES
+        if pre["large"]:
+            # A full build_layer() here would read every source file synchronously before the
+            # user's first prompt. Write the scaffold; the detached --force regen fills it in.
+            codemap.ensure_stub(ctx.project.project_dir, ctx.pdir)
+        else:
+            codemap.ensure(ctx.project.project_dir, ctx.pdir, files=files)
+            codemap.regenerate(ctx.project.project_dir, ctx.pdir, files=files)
     except Exception as e:
         config.log_error("codemap refresh failed: %r" % e)
+    g = None
     try:
         g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
-        pre["top"] = graph.render_top(g, graph.top(g, n=12)).rstrip("\n")
+        pre["top"] = graph.render_top(g, graph.top(g, n=graph.TOP_LIMIT)).rstrip("\n")
+    except Exception as e:
+        config.log_error("graph load failed: %r" % e)
+    if g is not None:
         try:
             from brain import lint                     # Task 11
             pre["health"] = lint.health_line(lint.run(ctx.vault, ctx.project.slug, ctx.project.project_dir, g))
         except ImportError:
             pass
-    except Exception as e:
-        config.log_error("graph load failed: %r" % e)
+        except Exception as e:                         # lint is advisory — never cost the injection
+            config.log_error("lint failed: %r" % e)
     return pre
 
 def _graph_lines(ctx):
@@ -291,11 +302,6 @@ def on_post_tool_use(ctx):
 
 on_post_tool_use.prepare = _prepare_post_tool_use
 
-_HANDLERS = {
-    "SessionStart": on_session_start,
-}
-_HANDLERS["PostToolUse"] = on_post_tool_use
-
 def gate_decision(s, mode, stop_hook_active, agent_id, last_msg):
     """Return a block reason, or None. Pure: no I/O."""
     if mode == "off" or stop_hook_active or agent_id or s.stop_blocks_this_turn:
@@ -321,6 +327,21 @@ def on_stop(ctx):
         ctx.state.source_edits_since_vault_write = 0   # soft tier resets after firing (spec §7.7)
     return HookResult(json={"decision": "block", "reason": reason.replace("{context}", ctx.context_path)})
 
+def _prepare_user_prompt_submit(ctx):
+    """Pre-lock: tokenise the prompt and build/load the graph. The locked body only reads and
+    writes session state and renders what is already in memory."""
+    prompt = str(ctx.payload.get("prompt") or "")
+    if retrieve.is_system_prompt(prompt):
+        return {}
+    terms = retrieve.tokens(prompt)
+    if not terms:
+        return {}
+    try:
+        g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
+    except Exception as e:
+        config.log_error("retrieval graph load failed: %r" % e); return {}
+    return {"graph": g, "terms": terms}
+
 def on_user_prompt_submit(ctx):
     # A <task-notification> prompt is a background-subagent completion notice, not a user
     # turn (spec §3/§7.2) — it must not clear a block the current turn already earned.
@@ -333,13 +354,9 @@ def on_user_prompt_submit(ctx):
     already = set(s.injected)
     if retrieve.is_done_signal(prompt) and (s.commits_since_vault_write + s.source_edits_since_vault_write) > 0:
         return HookResult("Brain: user signalled done — write the log entry and update ## State / ## Active Work in %s now.\n" % ctx.context_path)
-    terms = retrieve.tokens(prompt)
-    if not terms:
+    g, terms = ctx.pre.get("graph"), ctx.pre.get("terms")
+    if g is None or not terms:
         return EMPTY
-    try:
-        g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
-    except Exception as e:
-        config.log_error("retrieval graph load failed: %r" % e); return EMPTY
     nodes = retrieve.select(g, terms, already)
     if not nodes:
         return EMPTY
@@ -352,8 +369,7 @@ def on_user_prompt_submit(ctx):
     s.injected = merged[-_INJECTED_CAP:]
     return HookResult(text)
 
-_HANDLERS["Stop"] = on_stop
-_HANDLERS["UserPromptSubmit"] = on_user_prompt_submit
+on_user_prompt_submit.prepare = _prepare_user_prompt_submit
 
 def _rel(ctx, p):
     # Both sides realpath'd so a symlinked cwd yields "src/x.ts", never "../../repolink/src/x.ts".
@@ -364,8 +380,8 @@ def _rel(ctx, p):
 
 def _changed_line(ctx, with_git):
     files = [_rel(ctx, p) for p in ctx.state.edited_files]
-    if with_git:
-        files += [f for f in gitinfo.changed_files_today(ctx.cwd) if f not in files]
+    if with_git:                                  # gathered pre-lock by _prepare_pre_compact
+        files += [f for f in (ctx.pre.get("git_changed") or []) if f not in files]
     line = " ".join(files)
     if len(line) > 200:
         cut = line.rfind(" ", 0, 200)          # never truncate mid-path
@@ -387,6 +403,10 @@ def _append_entry(ctx, tag, with_git):
     vault.append(ctx.log_path, entry)
     return True
 
+def _prepare_pre_compact(ctx):
+    """Pre-lock: the only git call PreCompact makes."""
+    return {"git_changed": gitinfo.changed_files_today(ctx.cwd)}
+
 def on_pre_compact(ctx):
     if not vault.read(ctx.log_path):
         return HookResult("BRAIN SYNC: no log.md for '%s' at %s — run /brain init before compacting.\n" % (ctx.project.slug, ctx.log_path))
@@ -403,8 +423,7 @@ def on_session_end(ctx):
     s.delete()
     return EMPTY
 
-_HANDLERS["PreCompact"] = on_pre_compact
-_HANDLERS["SessionEnd"] = on_session_end
+on_pre_compact.prepare = _prepare_pre_compact
 
 _PUSH_RE = re.compile(r"\bgit\s+push\b")
 _MAIN_RULE_RE = re.compile(r"never\s+.*commit.*\bto\b.*\b(main|master)\b", re.I)
@@ -476,9 +495,22 @@ def push_targets(cmd, current_branch):
     return targets
 
 def _prepare_pre_tool_use(ctx):
+    """Pre-lock: the branch lookup for a push, and the whole graph hint for a Grep/Glob.
+    PreToolUse fires on every matching tool call, so its locked body must stay trivial."""
     ti = ctx.payload.get("tool_input") or {}
-    if str(ctx.payload.get("tool_name") or "") == "Bash" and _PUSH_RE.search(str(ti.get("command") or "")):
+    tool = str(ctx.payload.get("tool_name") or "")
+    if tool == "Bash" and _PUSH_RE.search(str(ti.get("command") or "")):
         return {"branch": gitinfo.current_branch(ctx.cwd)}
+    if tool in ("Grep", "Glob"):
+        term = _search_term(str(ti.get("pattern") or ""))
+        if not term:
+            return {}
+        try:
+            g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
+        except Exception as e:
+            config.log_error("pretool graph load failed: %r" % e); return {}
+        out = graph.render_find(g, graph.find(g, term, limit=9), limit=9)
+        return {"hint": "Brain: graph already knows —\n" + out.rstrip("\n")} if out else {}
     return {}
 
 def _deny(reason):
@@ -508,21 +540,13 @@ def on_pre_tool_use(ctx):
             return _deny("Brain: Hard Rules forbid pushing directly to '%s'. Push a feature branch and open a PR." % protected[0])
         return EMPTY
     if tool in ("Grep", "Glob"):
-        term = _search_term(str(ti.get("pattern") or ""))
-        if not term:
+        hint = ctx.pre.get("hint")                # rendered pre-lock by _prepare_pre_tool_use
+        if not hint:
             return EMPTY
-        try:
-            g = graph.load(ctx.vault, ctx.project.slug, ctx.project.project_dir)
-        except Exception as e:
-            config.log_error("pretool graph load failed: %r" % e); return EMPTY
-        out = graph.render_find(g, graph.find(g, term, limit=9), limit=9)
-        if not out:
-            return EMPTY
-        return HookResult(json={"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "Brain: graph already knows —\n" + out.rstrip("\n")}})
+        return HookResult(json={"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": hint}})
     return EMPTY
 
 on_pre_tool_use.prepare = _prepare_pre_tool_use
-_HANDLERS["PreToolUse"] = on_pre_tool_use
 
 def on_subagent_start(ctx):
     if not ctx.payload.get("agent_id"):
@@ -537,5 +561,16 @@ def on_subagent_stop(ctx):
     return HookResult(json={"hookSpecificOutput": {"hookEventName": "SubagentStop", "additionalContext":
         "Brain: subagent '%s' reported vault notes — fold them into %s / codemap.md ## Modules now (a concept note only if you'd link it from more than one place)." % (who, ctx.arch_path)}})
 
-_HANDLERS["SubagentStart"] = on_subagent_start
-_HANDLERS["SubagentStop"] = on_subagent_stop
+# One registry, defined after every handler. hooks/hooks.json registers exactly these nine
+# events; the parity test in tests/test_hooks_session.py keeps the two in step.
+_HANDLERS = {
+    "SessionStart": on_session_start,
+    "SessionEnd": on_session_end,
+    "UserPromptSubmit": on_user_prompt_submit,
+    "PreToolUse": on_pre_tool_use,
+    "PostToolUse": on_post_tool_use,
+    "Stop": on_stop,
+    "PreCompact": on_pre_compact,
+    "SubagentStart": on_subagent_start,
+    "SubagentStop": on_subagent_stop,
+}
