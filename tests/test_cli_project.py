@@ -90,6 +90,38 @@ class ProjectCliTests(unittest.TestCase):
     def test_map_annotate(self):
         rc, out = self._run("map", "--annotate"); self.assertEqual(rc, 0); self.assertIn("src/", out)
 
+    def test_graph_dismiss_writes_dismissed_json(self):
+        rc, out = self._run("graph", "dismiss", "some-concept"); self.assertEqual(rc, 0)
+        self.assertIn("dismissed: some-concept", out)
+        with open(os.path.join(self.pdir, ".brain", "dismissed.json")) as f:
+            self.assertIn("some-concept", json.load(f)["candidates"])
+
+    def test_repair_refuses_unknown_slug(self):
+        rc, out = self._run("repair", "--slug", "nope"); self.assertEqual(rc, 1)
+        self.assertIn("not found in vault", out)
+
+    def test_repair_refuses_folder_connected_to_another_slug(self):
+        vault.write(os.path.join(self.repo, "CLAUDE.md"), "# Brain: other\n\nbrain: other\n---\n# notes\n")
+        rc, out = self._run("repair", "--slug", "demo"); self.assertEqual(rc, 1)
+        self.assertIn("connected to 'other'", out)
+        self.assertIn("brain: other", vault.read(os.path.join(self.repo, "CLAUDE.md")))
+
+    def test_repair_rewrites_slim_block_and_preserves_rest(self):
+        vault.write(os.path.join(self.repo, "CLAUDE.md"), "# stale notes\nkeep me\n")
+        rc, out = self._run("repair", "--slug", "demo"); self.assertEqual(rc, 0)
+        self.assertIn("Repaired: demo", out)
+        text = vault.read(os.path.join(self.repo, "CLAUDE.md"))
+        self.assertIn("brain: demo", text)
+        self.assertIn("# stale notes\nkeep me\n", text)
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, "codemap.md")))
+        # Never touches vault content.
+        self.assertTrue(os.path.exists(self.ctx_path))
+
+    def test_repair_writes_slim_block_when_claude_md_absent(self):
+        os.remove(os.path.join(self.repo, "CLAUDE.md"))
+        rc, out = self._run("repair", "--slug", "demo"); self.assertEqual(rc, 0)
+        self.assertIn("brain: demo", vault.read(os.path.join(self.repo, "CLAUDE.md")))
+
 
 if __name__ == "__main__":
     unittest.main()
