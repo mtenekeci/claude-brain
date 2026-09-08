@@ -315,9 +315,18 @@ def on_session_start(ctx):
                   % (codemap.LARGE_REPO_FILES, what, cli_command())]
     if source in ("compact", "resume"):
         fm, _ = vault.parse_frontmatter(context_text)
-        expected = fm.get("branch") or "unset"
-        parts += ["", "Brain: context re-injected after %s; branch is %s (expected: %s)" % (
-            source, ctx.pre.get("branch") or "?", expected)]
+        expected = fm.get("branch")
+        line = "Brain: context re-injected after %s; branch is %s" % (source, ctx.pre.get("branch") or "?")
+        if expected:
+            line += " (expected: %s)" % expected
+        parts += ["", line]
+        # PreCompact/SessionEnd write their checkpoint with placeholder Completed/Decided lines.
+        # No model turn runs between the PreCompact hook and the compaction itself, so the hook's
+        # own stdout can only be acted on here, after the fact — this is the first turn that can.
+        if last and vault.last_entry_is_placeholder(last):
+            parts += ["", "Brain: the last log entry is a checkpoint with placeholder Completed/Decided lines — "
+                          "fill them in with real session detail now, then update ## State and ## Active Work in %s."
+                      % ctx.context_path]
     if migrated_line:
         parts += ["", migrated_line]
     return HookResult("\n".join(parts) + "\n", after_lock=after_lock)
@@ -563,8 +572,8 @@ def on_pre_compact(ctx):
         return HookResult("BRAIN SYNC: no log.md for '%s' at %s — run /brain init before compacting.\n" % (ctx.project.slug, ctx.log_path))
     wrote = _append_entry(ctx, "pre-compact", with_git=True)
     if wrote:
-        return HookResult("BRAIN SYNC: checkpoint written to %s. NOW fill in Completed and Decided with real session detail, then update ## State and ## Active Work in %s before the compact proceeds.\n" % (ctx.log_path, ctx.context_path))
-    return HookResult("BRAIN SYNC: a checkpoint already exists in %s — enrich its Completed/Decided fields, then update context.md.\n" % ctx.log_path)
+        return HookResult("BRAIN SYNC: checkpoint written to %s. After compaction, fill in its Completed and Decided lines with real session detail, then update ## State and ## Active Work in %s.\n" % (ctx.log_path, ctx.context_path))
+    return HookResult("BRAIN SYNC: a checkpoint already exists in %s — after compaction, enrich its Completed/Decided lines, then update context.md.\n" % ctx.log_path)
 
 def on_session_end(ctx):
     s = ctx.state

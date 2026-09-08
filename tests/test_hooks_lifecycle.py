@@ -25,8 +25,11 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn("Session 2 (pre-compact)", text)
         self.assertIn("Changed: ", text); self.assertIn("src/x.ts", text)
         self.assertIn("BRAIN SYNC", r.stdout)
-        hooks.dispatch("PreCompact", payload("PreCompact", self.repo))     # second compact: no duplicate
+        self.assertIn("After compaction, fill in", r.stdout)       # the hook cannot be acted on before it
+        self.assertNotIn("before the compact", r.stdout)
+        r2 = hooks.dispatch("PreCompact", payload("PreCompact", self.repo))     # second compact: no duplicate
         self.assertEqual(vault.count_log_entries(vault.read(self.log)), 2)
+        self.assertIn("already exists", r2.stdout)
 
     def test_session_end_silent_when_idle(self):
         hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
