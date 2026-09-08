@@ -27,6 +27,12 @@ def async_regen():
     Default True; tests and users who want no background processes set "async_regen": false."""
     return bool(load_config().get("async_regen", True))
 
+def graph_backend():
+    """'auto' (default) | 'builtin' | 'graphify' — which backend supplies the graph's code layer."""
+    g = load_config().get("graph")
+    v = g.get("backend", "auto") if isinstance(g, dict) else "auto"
+    return str(v or "auto").strip().lower() if isinstance(v, str) else "auto"
+
 def data_dir():
     d = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.claude/brain-data")
     os.makedirs(d, exist_ok=True)
