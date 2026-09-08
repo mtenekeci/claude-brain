@@ -72,6 +72,11 @@ your vault is rewritten by the upgrade.
   injection says so. With `async_regen: off` the build stays in the foreground instead.
 - Vault and code-map writes are atomic (temp file plus rename), so an interrupted session can
   no longer leave a truncated `context.md`.
+- **`PostToolUse` reminders are delivered as `additionalContext`.** Measured during the release
+  smoke: a `PostToolUse` hook's plain stdout is transcript-only and never reaches the turn, so
+  the commit reminder, the read nudge and the subagent vault-notes reminder were all being
+  written where nothing could act on them. They now ride
+  `hookSpecificOutput.additionalContext`, which was verified live to arrive.
 
 ### Removed
 
