@@ -1,0 +1,110 @@
+import os, tempfile, time, unittest
+from brain import state
+
+class StateTests(unittest.TestCase):
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["CLAUDE_PLUGIN_DATA"] = os.path.join(self.tmp.name, "data")
+
+    def tearDown(self):
+        os.environ.clear(); os.environ.update(self._env)
+        self.tmp.cleanup()
+
+    def test_defaults_roundtrip(self):
+        s = state.SessionState.load("abc")
+        self.assertEqual((s.reads, s.commits, s.injected), (0, 0, []))
+        s.slug = "demo"; s.note_read(); s.note_commit("fix: x"); s.note_source_edit("/r/a.py"); s.note_source_edit("/r/a.py")
+        s.save()
+        t = state.SessionState.load("abc")
+        self.assertEqual((t.slug, t.reads, t.commits, t.commits_since_vault_write), ("demo", 1, 1, 1))
+        self.assertEqual((t.source_edits, t.source_edits_since_vault_write, t.edited_files), (2, 2, ["/r/a.py"]))
+        self.assertEqual(t.commit_subjects, ["fix: x"])
+        self.assertGreater(t.last_work_at, 0)
+
+    def test_vault_write_clears_counters(self):
+        s = state.SessionState.load("s"); s.note_commit("c"); s.note_source_edit("/r/b.ts")
+        s.note_vault_write()
+        self.assertEqual((s.commits_since_vault_write, s.source_edits_since_vault_write), (0, 0))
+        self.assertEqual((s.commits, s.source_edits, s.vault_writes), (1, 1, 1))
+        self.assertGreaterEqual(s.last_vault_write, s.last_work_at)
+
+    def test_isolated_per_session_and_prune(self):
+        a = state.SessionState.load("a"); a.reads = 5; a.save()
+        b = state.SessionState.load("b"); self.assertEqual(b.reads, 0)
+        old = time.time() - 8 * 86400
+        os.utime(a.path, (old, old))
+        state.prune(days=7)
+        self.assertFalse(os.path.exists(a.path))
+        a.delete()  # no error when already gone
+
+    def test_locked_serializes_concurrent_increments(self):
+        import threading
+        def work():
+            for _ in range(50):
+                with state.locked("c") as s:
+                    s.reads += 1
+        ts = [threading.Thread(target=work) for _ in range(4)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        self.assertEqual(state.SessionState.load("c").reads, 200)
+
+    def test_locked_discard_skips_save(self):
+        with state.locked("d") as s:
+            s.reads = 9; s.discard = True
+        self.assertEqual(state.SessionState.load("d").reads, 0)
+
+    def test_delete_keeps_lock_file(self):
+        with state.locked("e") as s:
+            s.discard = True
+            s.delete()
+        self.assertFalse(os.path.exists(s.path))
+        self.assertTrue(os.path.exists(s.path + ".lock"))
+
+    def test_prune_skips_held_lock(self):
+        import fcntl
+        with state.locked("f") as s:
+            pass
+        old = time.time() - 8 * 86400
+        os.utime(s.path, (old, old))
+        os.utime(s.path + ".lock", (old, old))
+        lock_fd = open(s.path + ".lock", "a")
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        try:
+            state.prune(days=7)
+            self.assertTrue(os.path.exists(s.path + ".lock"))
+            self.assertFalse(os.path.exists(s.path))
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
+        state.prune(days=7)
+        self.assertFalse(os.path.exists(s.path + ".lock"))
+
+    def test_locked_timeout_raises_when_held(self):
+        import fcntl
+        lock_path = state.SessionState("x").path + ".lock"
+        holder = open(lock_path, "a")
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        try:
+            t0 = time.time()
+            with self.assertRaises(BlockingIOError):
+                with state.locked("x", timeout=0.2):
+                    self.fail("lock should not have been acquired")
+            self.assertLess(time.time() - t0, 0.5)
+        finally:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+            holder.close()
+        with state.locked("x", timeout=0.2) as s:      # released: same call now succeeds
+            s.reads = 7
+        self.assertEqual(state.SessionState.load("x").reads, 7)
+
+    def test_acquire_reports_non_eagain_errors_distinctly(self):
+        """A real lock failure (e.g. ENOLCK on a filesystem without locking) must surface
+        as itself, not be retried until the deadline and reported as contention."""
+        import errno
+        with self.assertRaises(OSError) as cm:
+            state._acquire_with(lambda fd: (_ for _ in ()).throw(OSError(errno.ENOLCK, "no locks")), timeout=0.1)
+        self.assertNotIn("lock busy", str(cm.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()
