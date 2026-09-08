@@ -350,7 +350,9 @@ def _cmd_status(args):
         age = int(time.time() - os.stat(cache_path).st_mtime)
     except OSError:
         age = 0
-    health = lint.health_line(lint.run(vault_root, proj.slug, proj.project_dir, g)) or "clean"
+    # status is display-only by contract: apply=False computes what lint would apply without
+    # writing to context.md or any concept note.
+    health = lint.health_line(lint.run(vault_root, proj.slug, proj.project_dir, g, apply=False)) or "clean"
     print("Brain status: %s (%s)" % (fm.get("project", proj.slug), proj.slug))
     print("Type: %s" % fm.get("type", "?"))
     print("Vault: %s" % vault_root)

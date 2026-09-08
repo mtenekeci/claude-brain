@@ -216,6 +216,28 @@ class ProjectCliTests(unittest.TestCase):
         self.assertIn("kept (referenced): brain-precompact.sh", out)
         self.assertTrue(os.path.exists(script))
 
+    def test_status_does_not_mutate_vault_notes_and_reports_pending_links(self):
+        """`status` is display-only by contract. An applicable manifest-dep link (jest, an
+        untyped devDependency with a matching concept note and no existing Used-by entry) must
+        be reported as pending, not written — context.md and the concept note stay byte-identical,
+        and `sync-prepare` (which does apply) still writes it."""
+        from brain import codemap
+        codemap.ensure(self.repo, self.pdir)                # populate the code layer's manifest deps
+        jest_path = os.path.join(self.vault, "concepts", "jest.md")
+        vault.write(jest_path, "---\nconcept: Jest\ntype: library\n---\n# Jest\n\n## Used by\n")
+        ctx_before = vault.read(self.ctx_path)
+        jest_before = vault.read(jest_path)
+        rc, out = self._run("status")
+        self.assertEqual(rc, 0)
+        self.assertIn("pending", out)
+        self.assertEqual(vault.read(self.ctx_path), ctx_before)
+        self.assertEqual(vault.read(jest_path), jest_before)
+        rc, out = self._run("sync-prepare")
+        self.assertEqual(rc, 0)
+        self.assertIn("auto-linked (manifest deps): jest", out)
+        self.assertIn("uses:: [[concepts/jest|Jest]]", vault.read(self.ctx_path))
+        self.assertIn("[[projects/demo/context|demo]]", vault.read(jest_path))
+
     def test_config_set_async_regen_echoes_on_off(self):
         rc, out = self._run("config", "set", "async_regen", "on")
         self.assertEqual(rc, 0); self.assertIn("async_regen: on", out)

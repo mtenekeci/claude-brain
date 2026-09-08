@@ -77,27 +77,31 @@ def typed_targets(g, slug):
     return {e.dst for e in g.edges
             if e.src in owned and e.type in graph.TYPED and e.dst.startswith("concept:")}
 
-def apply_auto(vault_root, slug, concept_slug, name, note, add_link):
-    """Append the `uses::` line (when `add_link`) and the `## Used by` row. True if anything was written."""
+def apply_auto(vault_root, slug, concept_slug, name, note, add_link, apply=True):
+    """Append the `uses::` line (when `add_link`) and the `## Used by` row. True if anything was
+    (or, with `apply=False`, would be) written — `apply=False` computes the same condition
+    without touching either file, for a display-only caller like `brain status`."""
     pdir = os.path.join(vault_root, "projects", slug)
     ctx_path = os.path.join(pdir, "context.md")
     text = vault.read(ctx_path)
     wrote = False
     link = "uses:: [[concepts/%s|%s]]" % (concept_slug, name)
     if add_link and text and link not in text:
-        lines = vault.get_section(text, "Architecture").splitlines()
-        # The `Full reference:` pointer is the section's last line by convention — stay above it.
-        idx = next((i for i, l in enumerate(lines) if l.startswith("Full reference:")), len(lines))
-        lines.insert(idx, link)
-        vault.write(ctx_path, vault.replace_section(text, "Architecture", "\n".join(lines)))
+        if apply:
+            lines = vault.get_section(text, "Architecture").splitlines()
+            # The `Full reference:` pointer is the section's last line by convention — stay above it.
+            idx = next((i for i, l in enumerate(lines) if l.startswith("Full reference:")), len(lines))
+            lines.insert(idx, link)
+            vault.write(ctx_path, vault.replace_section(text, "Architecture", "\n".join(lines)))
         wrote = True
     cpath = os.path.join(vault_root, "concepts", concept_slug + ".md")
     ctext = vault.read(cpath)
     marker = "[[projects/%s/context|%s]]" % (slug, slug)
     if ctext and marker not in vault.get_section(ctext, "Used by"):
-        body = vault.get_section(ctext, "Used by").rstrip("\n")
-        body = (body + "\n" if body else "") + "- %s — %s" % (marker, note)
-        vault.write(cpath, vault.replace_section(ctext, "Used by", body))
+        if apply:
+            body = vault.get_section(ctext, "Used by").rstrip("\n")
+            body = (body + "\n" if body else "") + "- %s — %s" % (marker, note)
+            vault.write(cpath, vault.replace_section(ctext, "Used by", body))
         wrote = True
     return wrote
 
@@ -145,8 +149,11 @@ def _project_slugs(vault_root):
     except OSError:
         return []
 
-def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=False):
-    """Reconcile concepts for `slug` (or every project). Auto-applies manifest-dep links.
+def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=False, apply=True):
+    """Reconcile concepts for `slug` (or every project). Auto-applies manifest-dep links unless
+    `apply=False`, in which case it computes the same `auto_applied` list — what it would write —
+    without touching `context.md` or any concept note. `status` is display-only by contract and
+    passes `apply=False`; SessionStart (`hooks.py`) and `sync-prepare` keep applying.
 
     `duplicates` is left empty unless `want_duplicates` — it is an O(n²) scan that only the CLI
     report displays, and `run()` is on the SessionStart path. `render(res, g)` fills it in on
@@ -162,7 +169,7 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
     if slug not in slugs:
         slugs = [slug] + slugs
     result = {"auto_applied": [], "auto_pending": 0, "candidates": [], "stale": [], "dangling": [],
-              "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs}
+              "duplicates": duplicates(g) if want_duplicates else [], "projects": slugs, "applied": apply}
     for s in slugs:
         # Other projects build from their own vault dir; build()/load() tolerate project_dir=None
         # because the code layer is read from the vault's codelayer.json, not the repo.
@@ -183,7 +190,7 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
                 continue
             try:
                 wrote = apply_auto(vault_root, s, cid.split(":", 1)[1], n.name,
-                                   "dependency `%s`" % dep, add_link=(cid not in typed))
+                                   "dependency `%s`" % dep, add_link=(cid not in typed), apply=apply)
             except OSError as e:                    # a read-only vault must not abort the whole report
                 config.log_error("lint: could not auto-link %s in %s: %r" % (cid, s, e))
                 wrote = False
@@ -206,18 +213,21 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
         for d in gg.dangling:
             if str(d[0]).startswith(owned_prefixes) and d not in result["dangling"]:
                 result["dangling"].append(d)
-    if result["auto_applied"]:
+    if result["auto_applied"] and apply:
         graph.load(vault_root, slug, project_dir, force=True)   # our own writes just staled the cache
     return result
 
 def health_line(res):
     """One line, or "" when there is nothing to say. Auto-applied writes are reported too:
-    they edit shared concept notes, so the user has to be able to see them happen."""
+    they edit shared concept notes, so the user has to be able to see them happen. When `res`
+    came from a `run(..., apply=False)` display-only pass, the same `auto_applied` list is
+    reported as pending instead — nothing was actually written."""
     n = len(res.get("candidates") or [])
     m = len(res.get("stale") or [])
     k = len(res.get("dangling") or [])
     a = len(res.get("auto_applied") or [])
     p = int(res.get("auto_pending") or 0)
+    applied = res.get("applied", True)
     if not (n or m or k or a or p):
         return ""
     parts = []
@@ -225,7 +235,10 @@ def health_line(res):
         parts.append("%d unlinked concept%s, %d stale Used-by entr%s, %d dangling link%s" % (
             n, "" if n == 1 else "s", m, "y" if m == 1 else "ies", k, "" if k == 1 else "s"))
     if a:
-        parts.append("%d concept link%s auto-applied" % (a, "" if a == 1 else "s"))
+        if applied:
+            parts.append("%d concept link%s auto-applied" % (a, "" if a == 1 else "s"))
+        else:
+            parts.append("%d link%s pending" % (a, "" if a == 1 else "s"))
     if p:
         parts.append("%d pending" % p)
     return "Brain: graph health — " + ", ".join(parts) + " (run /brain sync)"
@@ -244,7 +257,8 @@ def render(res, g=None):
     lines = ["lint: projects %s" % ", ".join(res.get("projects") or [])]
     if res.get("auto_applied"):
         pending = res.get("auto_pending") or 0
-        lines.append("auto-linked (manifest deps): " + ", ".join(label(p, x) for p, x in res["auto_applied"])
+        verb = "auto-linked (manifest deps)" if res.get("applied", True) else "links pending (manifest deps, run /brain sync)"
+        lines.append(verb + ": " + ", ".join(label(p, x) for p, x in res["auto_applied"])
                      + (" (+%d deferred to the next run)" % pending if pending else ""))
     c = res.get("candidates") or []
     if c:

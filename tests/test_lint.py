@@ -50,6 +50,22 @@ class LintTests(unittest.TestCase):
         res2 = lint.run(self.vault, "demo", self.repo, graph.load(self.vault, "demo", self.repo, force=True))
         self.assertEqual(res2["auto_applied"], [])                            # idempotent
 
+    def test_run_apply_false_reports_pending_without_writing(self):
+        ctx_path = os.path.join(self.pdir, "context.md")
+        jest_path = os.path.join(self.vault, "concepts", "jest.md")
+        ctx_before, jest_before = vault.read(ctx_path), vault.read(jest_path)
+        res = lint.run(self.vault, "demo", self.repo, self.g, apply=False)
+        self.assertEqual(sorted(res["auto_applied"]), [["demo", "jest"], ["demo", "nextauth"]])
+        self.assertEqual(vault.read(ctx_path), ctx_before)          # not written
+        self.assertEqual(vault.read(jest_path), jest_before)        # not written
+        self.assertIn("2 links pending", lint.health_line(res))
+        self.assertIn("links pending (manifest deps, run /brain sync): jest, nextauth", lint.render(res))
+        # the same graph, applied for real, still writes exactly what was reported as pending
+        res2 = lint.run(self.vault, "demo", self.repo, self.g)
+        self.assertEqual(sorted(res2["auto_applied"]), [["demo", "jest"], ["demo", "nextauth"]])
+        self.assertNotEqual(vault.read(ctx_path), ctx_before)
+        self.assertNotEqual(vault.read(jest_path), jest_before)
+
     def test_dismiss_and_health_and_render(self):
         lint.dismiss(self.pdir, "redis")
         res = lint.run(self.vault, "demo", self.repo, self.g)

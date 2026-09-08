@@ -80,6 +80,9 @@ them — `/brain graph dismiss <slug>` makes a link stay gone.
   the commit reminder, the read nudge and the subagent vault-notes reminder were all being
   written where nothing could act on them. They now ride
   `hookSpecificOutput.additionalContext`, which was verified live to arrive.
+- **`/brain status` no longer writes to the vault.** It used to auto-apply pending
+  manifest-dependency links like SessionStart and `sync-prepare`; being display-only, it now
+  reports them as pending instead (`/brain sync` still applies them).
 
 ### Removed
 
