@@ -29,6 +29,20 @@ def _graph(args):
         nid = args.node if args.node in g.nodes else (graph.find(g, args.node, limit=1) or [None])[0]
         nid = nid if isinstance(nid, str) or nid is None else nid.id
         sys.stdout.write(graph.render_near(g, nid, depth=args.depth, limit=args.limit) if nid else "no matches\n"); return 0
+    if args.cmd == "ask":
+        from brain import backends
+        # Two different failures, two different messages: "the backend is off" is a config
+        # answer, "the query came back empty" is a question-shape answer.
+        msg = "graph: graphify backend not active (config graph.backend, or run /graphify first)"
+        if backends.select(proj.project_dir) == backends.GRAPHIFY:
+            from brain.backends import graphify
+            out = graphify.ask(proj.project_dir, args.question, budget=args.budget)
+            if out.strip():
+                sys.stdout.write(out if out.endswith("\n") else out + "\n"); return 0
+            msg = "graph: graphify query returned nothing (timeout or error) — try a narrower question"
+        print(msg)
+        hit = (graph.find(g, args.question, limit=1) or [None])[0]
+        sys.stdout.write(graph.render_near(g, hit.id) if hit else "no matches\n"); return 0
     if args.cmd == "path":
         sys.stdout.write(graph.render_path(g, graph.path(g, args.a, args.b)) or "no path\n"); return 0
     if args.cmd == "top":
@@ -108,6 +122,7 @@ def build_parser():
     n = gs.add_parser("near"); n.add_argument("node"); n.add_argument("--depth", type=int, default=1); n.add_argument("--limit", type=int, default=40)
     pa = gs.add_parser("path"); pa.add_argument("a"); pa.add_argument("b")
     t = gs.add_parser("top"); t.add_argument("--n", type=int, default=12)
+    ak = gs.add_parser("ask"); ak.add_argument("question"); ak.add_argument("--budget", type=int, default=1500)
     gs.add_parser("rebuild")
     l = gs.add_parser("lint"); l.add_argument("--all-projects", action="store_true")
     m = sub.add_parser("map"); m.add_argument("--regen", action="store_true"); m.add_argument("--force", action="store_true"); m.add_argument("--quiet", action="store_true")

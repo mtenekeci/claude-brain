@@ -1,7 +1,7 @@
 """Knowledge graph derived from the vault (+ code layer, part 2). A read-only index — never writes markdown."""
 import json, os, re
 from collections import deque
-from brain import codemap
+from brain import backends, codemap
 from brain import vault as vt
 
 TYPED = ("uses", "depends-on", "decided-by", "implements", "see")
@@ -283,20 +283,27 @@ def build_code_layer(g, project_slug, layer, modules):
         _link_edges(g, mid, row.get("links", ""), project_slug)
     return g
 
-def build(vault_root, slug, project_dir=None):
-    """Full graph for one project. `project_dir` is accepted but unused — the code layer is read
-    from the vault's own `.brain/codelayer.json`, so other projects' graphs build without their repo."""
+def build(vault_root, slug, project_dir=None, layer=None, backend=None):
+    """Full graph for one project. The code layer comes from the selected backend; with no
+    `project_dir` that is always the builtin one read from the vault's own
+    `.brain/codelayer.json`, so other projects' graphs build without their repo checked out.
+    `layer`/`backend` are the already-resolved pair — `load` passes them so the backend is
+    consulted once per load instead of once per build."""
     g = Graph()
     build_vault_layer(g, vault_root, slug)
     pdir = os.path.join(vault_root, "projects", slug)
-    layer = codemap.read_layer(pdir)
+    if layer is None and backend is None:
+        layer, backend = backends.code_layer(project_dir, pdir)
+    project = g.nodes.get(node_id("project", slug))
+    if project is not None:
+        project.meta["backend"] = backend or backends.BUILTIN
     _, _, curated = codemap.split_codemap(vt.read(os.path.join(pdir, "codemap.md")))
     build_code_layer(g, slug, layer, codemap.parse_modules(curated))
     return g
 
 # ---------------------------------------------------------------- cache
 
-def inputs_mtime(vault_root, slug):
+def inputs_mtime(vault_root, slug, project_dir=None):
     """Newest mtime across every file the graph is derived from, in integer nanoseconds.
 
     Nanoseconds, not float seconds: a same-second edit must invalidate the cache, and float
@@ -310,6 +317,9 @@ def inputs_mtime(vault_root, slug):
     cdir = os.path.join(vault_root, "concepts")
     if os.path.isdir(cdir):
         paths.append(cdir); paths += [os.path.join(cdir, f) for f in os.listdir(cdir)]
+    if project_dir:
+        # graphify's output is an input too: re-running /graphify moves nothing in the vault.
+        paths.append(os.path.join(project_dir, "graphify-out", "graph.json"))
     m = 0
     for p in paths:
         try:
@@ -323,22 +333,33 @@ def load(vault_root, slug, project_dir=None, force=False):
     and a cache that cannot be written is not fatal."""
     pdir = os.path.join(vault_root, "projects", slug)
     cache = os.path.join(pdir, ".brain", "graph.json")
-    stamp = inputs_mtime(vault_root, slug)
+    stamp = inputs_mtime(vault_root, slug, project_dir)
+    # Cheap: names the selected backend and hashes its input file without parsing it, so a
+    # cache hit never pays for reading the code layer.
+    backend, source = backends.source_key(project_dir, pdir)
     if not force:
         try:
             with open(cache, encoding="utf-8") as f:
                 d = json.load(f)
             # Valid JSON is not a valid cache: `[]` and `{"graph": null}` both parse fine.
-            if isinstance(d, dict) and isinstance(d.get("graph"), dict) and d.get("built_at", -1) >= stamp:
+            # backend/source guard the case no mtime can see: the same vault files rebuilt
+            # against a different code layer (config switched, or graphify regenerated).
+            if (isinstance(d, dict) and isinstance(d.get("graph"), dict) and d.get("built_at", -1) >= stamp
+                    and d.get("backend") == backend and d.get("source") == source):
                 return Graph.from_dict(d["graph"])
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
-    g = build(vault_root, slug, project_dir)
+    layer, effective = backends.code_layer(project_dir, pdir)
+    g = build(vault_root, slug, project_dir, layer=layer, backend=effective)
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         tmp = cache + ".tmp"
+        # The cache keys off what was *selected*, not what the selection produced: a graph that
+        # fails to parse falls back to builtin deterministically, and storing "builtin" here
+        # would make every later load see a mismatch and rebuild. The graph's own project node
+        # carries the backend actually used.
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"built_at": stamp, "graph": g.to_dict()}, f)
+            json.dump({"built_at": stamp, "backend": backend, "source": source, "graph": g.to_dict()}, f)
         os.replace(tmp, cache)
     except OSError:
         pass
