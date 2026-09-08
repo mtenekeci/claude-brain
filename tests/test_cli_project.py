@@ -90,6 +90,29 @@ class ProjectCliTests(unittest.TestCase):
     def test_map_annotate(self):
         rc, out = self._run("map", "--annotate"); self.assertEqual(rc, 0); self.assertIn("src/", out)
 
+    def test_remove_disconnect_load_reject_path_shaped_slugs(self):
+        sentinel = os.path.join(self.vault, "evil"); os.makedirs(sentinel)
+        with open(os.path.join(sentinel, "marker"), "w") as f: f.write("keep me")
+        rc, out = self._run("remove", "../evil", "--confirm", "../evil")
+        self.assertEqual(rc, 1); self.assertIn("invalid slug", out)
+        self.assertTrue(os.path.exists(os.path.join(sentinel, "marker")))
+        self.assertTrue(os.path.exists(self.pdir))
+        rc, out = self._run("disconnect", "../x"); self.assertEqual(rc, 1); self.assertIn("invalid slug", out)
+        rc, out = self._run("load", "../x"); self.assertEqual(rc, 1); self.assertIn("invalid slug", out)
+
+    def test_clean_orphans_reports_a_deletion_failure_honestly(self):
+        orphan_dir = os.path.join(self.tmp.name, ".claude", "brain-broken.sh")
+        os.makedirs(orphan_dir)          # a directory named like a hook script: os.remove() must fail on it
+        rc, out = self._run("status", "--clean-orphans")
+        self.assertEqual(rc, 0); self.assertIn("failed:", out); self.assertIn("brain-broken.sh", out)
+        self.assertTrue(os.path.isdir(orphan_dir))
+        self.assertNotIn("removed: brain-broken.sh", out)
+
+    def test_config_set_async_regen_echoes_on_off(self):
+        rc, out = self._run("config", "set", "async_regen", "on")
+        self.assertEqual(rc, 0); self.assertIn("async_regen: on", out)
+        self.assertNotIn("True", out)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,21 @@ def _curated_text(pdir):
     return curated
 
 
+def _print_unannotated_dirs(dirs, limit):
+    """Shared `<dir>/  (<n> files)` line format for `sync-prepare` and `map --annotate`."""
+    for d, cnt in dirs[:limit]:
+        print("  %s/  (%d files)" % (d, cnt))
+
+
+def _require_valid_slug(value):
+    """None on a valid slug; the exit-1 message otherwise. Every entry point that turns a
+    user-supplied slug into a vault filesystem path must call this BEFORE building that path —
+    an unchecked '../x' can walk out of <vault>/projects/."""
+    if not project.valid_slug(value):
+        return "brain: invalid slug '%s'" % value
+    return None
+
+
 def _graph(args):
     from brain import graph
     r = resolve()
@@ -73,8 +88,7 @@ def _map(args):
             print("all major directories have a Modules row")
         else:
             print("unannotated dirs:")
-            for d, cnt in dirs[:10]:
-                print("  %s/  (%d files)" % (d, cnt))
+            _print_unannotated_dirs(dirs, 10)
         return 0
     if args.regen or args.force:
         changed = codemap.regenerate(proj.project_dir, pdir, force=args.force)
@@ -190,8 +204,7 @@ def _cmd_sync_prepare(args):
     sys.stdout.write(lint.render(lint.run(vault_root, proj.slug, proj.project_dir, g, want_duplicates=False)))
     dirs = codemap.unannotated_dirs(proj.project_dir, _curated_text(pdir))
     print("unannotated dirs:")
-    for d, cnt in dirs[:5]:
-        print("  - %s/ (%d files)" % (d, cnt))
+    _print_unannotated_dirs(dirs, 5)
     return 0
 
 
@@ -240,17 +253,21 @@ def _orphan_scripts(vault_root, proj):
 
 
 def _clean_orphans(orphans):
-    removed, kept = [], []
+    """(removed, kept, failed). A deletion that raises (e.g. the "script" is actually a
+    directory) must NOT be reported as removed — that would tell the user something is gone
+    when it is still on disk."""
+    removed, kept, failed = [], [], []
     for name, ref in orphans:
         if ref:
             kept.append(name)
             continue
+        path = os.path.join(os.path.expanduser("~/.claude"), name)
         try:
-            os.remove(os.path.join(os.path.expanduser("~/.claude"), name))
-        except OSError:
-            pass
-        removed.append(name)
-    return removed, kept
+            os.remove(path)
+            removed.append(name)
+        except OSError as e:
+            failed.append("%s (%s)" % (name, e.strerror or str(e)))
+    return removed, kept, failed
 
 
 def _cmd_status(args):
@@ -307,11 +324,13 @@ def _cmd_status(args):
     else:
         print("Orphan v1 hook scripts: none")
     if getattr(args, "clean_orphans", False):
-        removed, kept = _clean_orphans(orphans)
+        removed, kept, failed = _clean_orphans(orphans)
         if removed:
             print("removed: %s" % ", ".join(removed))
         if kept:
             print("kept (referenced): %s" % ", ".join(kept))
+        if failed:
+            print("failed: %s" % ", ".join(failed))
     print("── State " + "─" * 32)
     print(vault.get_section(ctx_text, "State"))
     print("── Active Work " + "─" * 26)
@@ -338,6 +357,10 @@ def _cmd_load(args):
     vault_root = resolve_vault()
     if vault_root is None:
         return 2
+    for entry in args.slugs:
+        err = _require_valid_slug(entry)
+        if err:
+            print(err); return 1
     missing, resolved, seen, expansions = [], [], set(), []
     for entry in args.slugs:
         proj_ctx = os.path.join(vault_root, "projects", entry, "context.md")
@@ -389,7 +412,12 @@ def _cmd_config(args):
         except ValueError as e:
             print(str(e)); return 1
         data = config.load_config()
-        shown = data.get("graph", {}).get("backend") if args.key == "graph.backend" else data.get(args.key)
+        if args.key == "graph.backend":
+            shown = data.get("graph", {}).get("backend")
+        elif args.key == "async_regen":
+            shown = "on" if data.get("async_regen") else "off"          # echo on/off, not True/False
+        else:
+            shown = data.get(args.key)
         print("%s: %s" % (args.key, shown))
         return 0
     data = config.load_config()
@@ -428,12 +456,20 @@ def _cmd_remove(args):
     if vault_root is None:
         return 2
     slug = args.slug
+    err = _require_valid_slug(slug)
+    if err:
+        print(err); return 1
     pdir = os.path.join(vault_root, "projects", slug)
     if not os.path.isdir(pdir):
         print("Project '%s' not found in vault." % slug); return 1
     if args.confirm != slug:
         print("This will permanently delete vault project '%s'.\nType '%s' to confirm." % (slug, slug))
         return 1
+    # Defense-in-depth: valid_slug() already rules out a path-shaped slug, but a real rmtree
+    # is destructive enough to double-check the resolved dir actually landed inside projects/.
+    projects_root = os.path.realpath(os.path.join(vault_root, "projects"))
+    if os.path.commonpath([os.path.realpath(pdir), projects_root]) != projects_root:
+        print("brain: refusing to delete outside vault projects/: %s" % pdir); return 1
     fm, _ = vault.parse_frontmatter(vault.read(os.path.join(pdir, "context.md")))
     path = fm.get("path", "")
     touched, warn = False, None
@@ -463,6 +499,9 @@ def _cmd_disconnect(args):
     if vault_root is None:
         return 2
     slug = args.slug
+    err = _require_valid_slug(slug)
+    if err:
+        print(err); return 1
     ctx_path = os.path.join(vault_root, "projects", slug, "context.md")
     if not os.path.exists(ctx_path):
         print("Project '%s' not found in vault." % slug); return 1
