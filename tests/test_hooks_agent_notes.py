@@ -5,7 +5,7 @@ The two channels that DO reach the parent are PostToolUse on a foreground `Agent
 the `<task-notification>` prompt a background agent's completion submits.
 """
 import json, os, tempfile, unittest
-from tests.helpers import make_graph_vault, make_project, write_config, payload
+from tests.helpers import make_graph_vault, make_project, write_config, payload, read_text
 from brain import hooks, briefing
 
 class AgentNotesTests(unittest.TestCase):
@@ -58,7 +58,7 @@ class AgentNotesTests(unittest.TestCase):
 
     def test_subagent_stop_is_not_registered(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(hooks.__file__)))
-        data = json.load(open(os.path.join(root, "hooks", "hooks.json"), encoding="utf-8"))
+        data = json.loads(read_text(os.path.join(root, "hooks", "hooks.json")))
         self.assertNotIn("SubagentStop", data["hooks"]); self.assertNotIn("SubagentStop", hooks._HANDLERS)
         self.assertEqual(sorted(data["hooks"]), sorted(hooks._HANDLERS))
         self.assertEqual(data["hooks"]["PostToolUse"][0]["matcher"], "Bash|Read|Edit|Write|MultiEdit|Agent")

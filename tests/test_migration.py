@@ -1,5 +1,5 @@
 import json, os, tempfile, unittest
-from tests.helpers import make_vault, make_project, write_config, payload
+from tests.helpers import make_vault, make_project, write_config, payload, read_text
 from brain import migrate, project, hooks, vault
 
 LEGACY_SETTINGS = {"permissions": {"allow": ["Read(~/x/**)", "café"]}, "hooks": {
@@ -109,7 +109,7 @@ class MigrationTests(unittest.TestCase):
         with open(bak, "w") as f: f.write("PRECIOUS")
         proj = project.resolve_project(self.repo)
         actions = migrate.migrate_project(proj, self.vault, self.repo)
-        self.assertEqual(open(bak).read(), "PRECIOUS")
+        self.assertEqual(read_text(bak), "PRECIOUS")
         self.assertTrue(os.path.exists(bak + ".1"))
         self.assertTrue(any("brain-bak.1" in a for a in actions))
 

@@ -1,5 +1,5 @@
 import json, os, subprocess, tempfile, unittest
-from tests.helpers import make_graph_vault, make_project, make_source_tree, write_config, payload
+from tests.helpers import make_graph_vault, make_project, make_source_tree, write_config, payload, read_text
 from brain import hooks, briefing, vault, codemap
 
 class PreToolUseTests(unittest.TestCase):
@@ -83,5 +83,5 @@ class PreToolUseTests(unittest.TestCase):
 
     def test_hooks_json_registers_pretooluse(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(hooks.__file__)))
-        data = json.load(open(os.path.join(root, "hooks", "hooks.json"), encoding="utf-8"))
+        data = json.loads(read_text(os.path.join(root, "hooks", "hooks.json")))
         self.assertEqual(data["hooks"]["PreToolUse"][0]["matcher"], "Bash|Grep|Glob")

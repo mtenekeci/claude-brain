@@ -1,5 +1,11 @@
 import json, os
 
+def read_text(path):
+    """Read and close. The suite is run under `-W error::ResourceWarning`, so a bare
+    `open(p).read()` in an assertion is a test failure waiting for the next GC."""
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
 def make_vault(tmp, slug="demo", context_extra="", log_entries=None):
     """Create <tmp>/vault with _system/, concepts/, projects/<slug>/{context,architecture,log}.md."""
     # realpath: brain canonicalises every path it stores, and macOS tmpdirs are symlinked.

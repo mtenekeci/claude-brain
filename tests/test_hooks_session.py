@@ -1,5 +1,5 @@
 import json, os, tempfile, unittest
-from tests.helpers import make_vault, make_project, write_config, payload, make_graph_vault, make_source_tree, stub_popen
+from tests.helpers import make_vault, make_project, write_config, payload, make_graph_vault, make_source_tree, stub_popen, read_text
 from brain import hooks, state
 
 class SessionStartTests(unittest.TestCase):
@@ -141,7 +141,7 @@ class SessionStartGraphTests(unittest.TestCase):
         self.assertEqual(builds, [])                                       # no synchronous full build
         self.assertEqual(len(calls), 1); self.assertIn("--regen", calls[0][0]); self.assertIn("--force", calls[0][0])
         self.assertTrue(state.SessionState.load("s1").codemap_stale)
-        cm = open(os.path.join(self.pdir, "codemap.md"), encoding="utf-8").read()
+        cm = read_text(os.path.join(self.pdir, "codemap.md"))
         sha, gen, curated = hooks.codemap.split_codemap(cm)
         self.assertEqual((sha, gen.strip()), ("", ""))                     # empty generated block
         self.assertIn("## Modules", curated)                               # curated template present
@@ -157,7 +157,7 @@ class SessionStartGraphTests(unittest.TestCase):
             hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
         finally:
             hooks.codemap.list_files = orig_lf
-        text = open(os.path.join(self.pdir, "codemap.md"), encoding="utf-8").read()
+        text = read_text(os.path.join(self.pdir, "codemap.md"))
         self.assertIn("src/auth/session.ts", text)                                  # not a stub: built in the foreground
         self.assertFalse(state.SessionState.load("s1").codemap_stale)               # nothing was deferred
 

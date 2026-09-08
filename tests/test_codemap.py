@@ -1,5 +1,5 @@
 import json, os, tempfile, unittest
-from tests.helpers import make_vault, make_project, make_source_tree, write_config
+from tests.helpers import make_vault, make_project, make_source_tree, write_config, read_text
 from brain import codemap
 
 class CodemapExtractTests(unittest.TestCase):
@@ -24,10 +24,10 @@ class CodemapExtractTests(unittest.TestCase):
             self.assertEqual(codemap.list_files(t), ["src/a.ts"])
 
     def test_extract_symbols_per_language(self):
-        ts = open(os.path.join(self.repo, "src/auth/session.ts")).read()
+        ts = read_text(os.path.join(self.repo, "src/auth/session.ts"))
         self.assertEqual(codemap.extract_symbols(ts, ".ts"), ["SessionStore", "refresh", "TTL"])
         self.assertEqual(codemap.extract_symbols("export default function main() {}\nexport function verify() {}", ".ts"), ["main", "verify"])
-        py = open(os.path.join(self.repo, "lib/util.py")).read()
+        py = read_text(os.path.join(self.repo, "lib/util.py"))
         self.assertEqual(codemap.extract_symbols(py, ".py"), ["Util", "run"])   # _private excluded
         self.assertEqual(codemap.extract_symbols("func (s *S) Do() {}\nfunc New() *S { return nil }\n", ".go"), ["Do", "New"])
         self.assertEqual(codemap.extract_symbols("pub fn go() {}\npub struct P;\nfn hidden() {}\n", ".rs"), ["go", "P"])
@@ -37,9 +37,9 @@ class CodemapExtractTests(unittest.TestCase):
 
     def test_extract_imports_resolves_relative_only(self):
         files = set(codemap.list_files(self.repo))
-        ts = open(os.path.join(self.repo, "src/auth/session.ts")).read()
+        ts = read_text(os.path.join(self.repo, "src/auth/session.ts"))
         self.assertEqual(codemap.extract_imports("src/auth/session.ts", ts, files), ["src/auth/verify.ts", "src/db.ts"])
-        py = open(os.path.join(self.repo, "lib/util.py")).read()
+        py = read_text(os.path.join(self.repo, "lib/util.py"))
         self.assertEqual(codemap.extract_imports("lib/util.py", py, files), ["lib/helpers.py"])   # `import os` ignored
         # "../db" from "src/a.ts" (dirname "src") normalizes to root-level "db.ts", which isn't
         # in the fileset (only "src/db.ts" is) — so only the sibling import resolves.
@@ -211,7 +211,7 @@ class CodemapRenderTests(unittest.TestCase):
         self.assertFalse(codemap.regenerate(self.repo, self.pdir))          # same fingerprint → no rewrite
         with open(os.path.join(self.repo, "src", "dirty.ts"), "w") as f: f.write("export function dirty() {}\n")
         self.assertTrue(codemap.regenerate(self.repo, self.pdir))           # uncommitted edit changes the fingerprint
-        self.assertIn("src/dirty.ts  (dirty)", open(cm, encoding="utf-8").read())
+        self.assertIn("src/dirty.ts  (dirty)", read_text(cm))
         self.assertFalse(codemap.regenerate(self.repo, self.pdir))
         with open(cm, "a", encoding="utf-8") as f: f.write("| auth | src/auth/ | sessions | |\n")
         import subprocess
@@ -240,19 +240,19 @@ class CodemapRenderTests(unittest.TestCase):
             self.assertFalse(codemap.regenerate(src, pdir))         # third: still unchanged
             with open(os.path.join(src, "src", "b.ts"), "w") as f: f.write("export function b() {}\n")
             self.assertTrue(codemap.regenerate(src, pdir))          # new file → new key → rebuild
-            self.assertIn("src/b.ts", open(os.path.join(pdir, "codemap.md"), encoding="utf-8").read())
+            self.assertIn("src/b.ts", read_text(os.path.join(pdir, "codemap.md")))
             self.assertEqual(codemap.freshness_key(os.path.join(src, "empty")), "")   # nothing to hash
 
     def test_ensure_stub_writes_an_empty_generated_block(self):
         pdir = os.path.join(self.vault, "projects", "stub"); os.makedirs(pdir)
         self.assertTrue(codemap.ensure_stub(self.repo, pdir))
         self.assertFalse(codemap.ensure_stub(self.repo, pdir))       # idempotent
-        text = open(os.path.join(pdir, "codemap.md"), encoding="utf-8").read()
+        text = read_text(os.path.join(pdir, "codemap.md"))
         sha, gen, curated = codemap.split_codemap(text)
         self.assertEqual((sha, gen.strip()), ("", ""))
         self.assertIn("## Modules", curated)
         self.assertTrue(codemap.regenerate(self.repo, pdir))         # empty sha never matches → fills in
-        self.assertIn("src/auth/session.ts", open(os.path.join(pdir, "codemap.md"), encoding="utf-8").read())
+        self.assertIn("src/auth/session.ts", read_text(os.path.join(pdir, "codemap.md")))
 
     def test_regenerate_tolerates_missing_codemap(self):
         self.assertTrue(codemap.regenerate(self.repo, self.pdir, force=True))

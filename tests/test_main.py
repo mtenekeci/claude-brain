@@ -7,16 +7,23 @@ class MainEntryPointTests(unittest.TestCase):
     """The entry point must never raise and never print outside a brain project — whatever
     Claude Code hands it on stdin."""
 
+    def setUp(self):
+        """Snapshot and isolate the environment. Two of these tests call main() IN-PROCESS,
+        so without this they would read the developer's real ~/.claude/brain.config and could
+        touch the real vault; they also mutate os.environ, which must not leak to other tests."""
+        snapshot = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(snapshot)))
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        os.environ["BRAIN_CONFIG"] = os.path.join(self.tmp.name, "brain.config")   # no config file at all
+        os.environ["CLAUDE_PLUGIN_DATA"] = os.path.join(self.tmp.name, "data")
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+
     def _run(self, **kw):
-        with tempfile.TemporaryDirectory() as tmp:
-            env = dict(os.environ)
-            env["BRAIN_CONFIG"] = os.path.join(tmp, "brain.config")     # no config file at all
-            env["CLAUDE_PLUGIN_DATA"] = os.path.join(tmp, "data")
-            env.pop("CLAUDE_PROJECT_DIR", None)
-            cwd = os.path.join(tmp, "elsewhere")                        # NOT a brain project
-            os.makedirs(cwd)
-            return subprocess.run([sys.executable, MAIN, "hook", "SessionStart"],
-                                  cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kw)
+        cwd = os.path.join(self.tmp.name, "elsewhere")                  # NOT a brain project
+        os.makedirs(cwd, exist_ok=True)
+        return subprocess.run([sys.executable, MAIN, "hook", "SessionStart"],
+                              cwd=cwd, env=dict(os.environ), stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kw)
 
     def test_garbage_stdin_exits_zero_and_silent(self):
         r = self._run(input=b"not json")
@@ -39,17 +46,13 @@ class MainEntryPointTests(unittest.TestCase):
     def test_internal_failure_is_logged_and_exits_zero(self):
         """Any exception below main() is logged to brain.log and exits 0, silently."""
         mod = self._load_main()
-        env, tmp = dict(os.environ), tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(env)))
-        os.environ["CLAUDE_PLUGIN_DATA"] = os.path.join(tmp.name, "data")
         original = mod._run
         mod._run = lambda argv: (_ for _ in ()).throw(RuntimeError("kaboom"))
         try:
             self.assertEqual(mod.main(["hook", "SessionStart"]), 0)
         finally:
             mod._run = original
-        with open(os.path.join(tmp.name, "data", "brain.log"), encoding="utf-8") as f:
+        with open(os.path.join(self.tmp.name, "data", "brain.log"), encoding="utf-8") as f:
             self.assertIn("kaboom", f.read())
 
     def test_stdin_none_is_treated_as_empty(self):

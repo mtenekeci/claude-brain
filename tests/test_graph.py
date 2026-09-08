@@ -1,5 +1,5 @@
 import json, os, tempfile, unittest
-from tests.helpers import make_graph_vault, make_project, make_source_tree, write_config
+from tests.helpers import make_graph_vault, make_project, make_source_tree, write_config, read_text
 from brain import codemap, graph
 
 class GraphModelTests(unittest.TestCase):
@@ -135,7 +135,7 @@ class GraphCarryOverTests(unittest.TestCase):
         Scanning the whole context.md for the project node too produced a second, misleading
         project→concept edge for every decision that cites a concept."""
         ctx = os.path.join(self.vault, "projects", "demo", "context.md")
-        text = open(ctx, encoding="utf-8").read().replace(
+        text = read_text(ctx).replace(
             "- **Use Postgres (2026-01-02)**: because.",
             "- **Use Postgres (2026-01-02)**: because. uses:: [[concepts/nextauth|NextAuth]]")
         with open(ctx, "w", encoding="utf-8") as f: f.write(text)
