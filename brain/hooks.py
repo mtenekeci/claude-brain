@@ -581,8 +581,10 @@ on_pre_compact.prepare = _prepare_pre_compact
 # accepts a global option in (`git -c x=y push`, `git -C . push`, `git --no-pager push`,
 # `git -P push`, `git --work-tree=. push`) never reached `push_targets`, which has parsed those
 # correctly all along. The lookarounds exclude `-`, so `git-lfs` and `push-notify` are not `git`
-# and `push`; `[^\n;|&]` keeps the two tokens inside one command.
-_PUSH_RE = re.compile(r"(?<![\w-])git(?![\w-])[^\n;|&]*?(?<![\w-])push(?![\w-])")
+# and `push`; splitting on `[\n;|&]` keeps the two tokens inside one command.
+_GIT_TOKEN_RE = re.compile(r"(?<![\w-])git(?![\w-])")
+_PUSH_TOKEN_RE = re.compile(r"(?<![\w-])push(?![\w-])")
+_GATE_SPLIT_RE = re.compile(r"[\n;|&]")
 _CONTINUATION_RE = re.compile(r"\\\n[ \t]*")
 _MAIN_RULE_RE = re.compile(r"never\s+.*commit.*\bto\b.*\b(main|master)\b", re.I)
 _PUSH_VALUE_OPTS = ("-o", "--push-option", "--receive-pack", "--exec")
@@ -617,7 +619,18 @@ def looks_like_push(cmd):
     """Cheap "is this worth parsing at all" test, shared by the PreToolUse gate and its prepare
     phase. Deliberately permissive — `push_targets` is what decides, and it returns [] for a
     command that merely mentions a push."""
-    return bool(_PUSH_RE.search(_join_continuations(cmd)))
+    # Two linear token searches per separator-split segment. A single lazy regex spanning
+    # both tokens is quadratic on a long separator-free line, and this runs on every Bash call.
+    for seg in _GATE_SPLIT_RE.split(_join_continuations(cmd)):
+        m = _GIT_TOKEN_RE.search(seg)
+        if m and _PUSH_TOKEN_RE.search(seg, m.end()):
+            return True
+    return False
+
+def _mentions_push(text):
+    """`git` token followed later by a `push` token, linear time (see looks_like_push)."""
+    m = _GIT_TOKEN_RE.search(text or "")
+    return bool(m and _PUSH_TOKEN_RE.search(text, m.end()))
 # A segment that is a `git push` the parser cannot resolve to concrete branch names. It is a
 # TARGET, not a branch: `on_pre_tool_use` denies on it outright. The distinction matters — the
 # obvious "conservative fallback", the current branch, is exactly the value both deny rules
@@ -759,7 +772,7 @@ def push_targets(cmd, current_branch, _depth=0):
         except ValueError:
             # Unbalanced quotes the segment splitter could not keep together. Dropping the
             # segment silently is exactly the false ALLOW this guard exists to prevent.
-            if _PUSH_RE.search(seg):
+            if _mentions_push(seg):
                 add([UNPARSED])
             continue
         opaque = wrapped = False
@@ -778,7 +791,7 @@ def push_targets(cmd, current_branch, _depth=0):
                     continue                    # the new head may be another wrapper
             break
         if opaque:
-            add([UNPARSED] if _PUSH_RE.search(seg) else [])
+            add([UNPARSED] if _mentions_push(seg) else [])
             continue
         payload = _nested_payload(toks)
         if payload is not None:
@@ -786,13 +799,13 @@ def push_targets(cmd, current_branch, _depth=0):
             # (so `bash -c 'git push origin main'` reports main, not a guess), and anything the
             # nested parse cannot see through is unresolved — never "no push".
             nested = push_targets(payload, current_branch, _depth + 1) if _depth < 1 else []
-            add(nested or ([UNPARSED] if _PUSH_RE.search(payload) else []))
+            add(nested or ([UNPARSED] if _mentions_push(payload) else []))
             continue
         if not toks or toks[0] != "git":
             # `wrapped` means the first-candidate scan above picked the command word, and it was
             # not a push after all — `sudo -u git git push …` picks the OPTION VALUE `git`. The
             # scan cannot tell the two apart, so the segment is unresolved, not "no push".
-            if wrapped and _PUSH_RE.search(seg):
+            if wrapped and _mentions_push(seg):
                 add([UNPARSED])
             continue
         idx = 1
@@ -806,7 +819,7 @@ def push_targets(cmd, current_branch, _depth=0):
                 idx += 1; continue
             break
         if idx >= len(toks) or toks[idx] != "push":
-            if wrapped and _PUSH_RE.search(seg):
+            if wrapped and _mentions_push(seg):
                 add([UNPARSED])
             continue
         positional, skip, broad = [], False, False
