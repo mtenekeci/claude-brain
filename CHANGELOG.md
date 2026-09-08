@@ -4,6 +4,28 @@ All notable changes to claude-brain are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.0.2
+
+Concept relevance. Measured on a 21-concept vault: only 2–3 of the 12 "most-connected nodes"
+injected at session start belonged to the current project, and a prompt containing the word
+"concepts" or "projects" retrieved the vault's busiest concepts regardless of topic.
+
+### Changed
+
+- `graph top` (and the SessionStart hub list) is scoped to the current project: the project's
+  own neighbourhood — anchor plus two hops over every edge type except `mentions` — ranks
+  first; vault-wide hubs only fill whatever room is left. The header now names the project.
+- Retrieval and `graph find` no longer substring-match a vault note's absolute path, so
+  directory names (`concepts`, `projects`, the vault root's own path components) are not
+  hits. Repo-relative code paths (`src/auth`) still match.
+- Concept hits and hub lines carry the note's first sentence (`— Docker · Container runtime
+  used for…`, capped at 120 characters) so a hit answers "what is this" without a Read.
+
+### Added
+
+- `graph lint`, `sync-prepare` and the session-start health line report concept notes whose
+  frontmatter lacks the `concept:` and `type:` keys the template requires.
+
 ## 2.0.1
 
 ### Fixed

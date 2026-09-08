@@ -136,7 +136,7 @@ class SessionStartGraphTests(unittest.TestCase):
         r = hooks.dispatch("SessionStart", payload("SessionStart", self.repo, source="startup"))
         self.assertTrue(os.path.exists(os.path.join(self.pdir, "codemap.md")))
         self.assertTrue(os.path.exists(os.path.join(self.pdir, ".brain", "graph.json")))
-        self.assertIn("Brain: most-connected nodes", r.stdout); self.assertIn("project demo", r.stdout)
+        self.assertIn("Brain: most-connected nodes for demo", r.stdout); self.assertIn("project demo", r.stdout)
         self.assertNotIn("src/auth/session.ts  (SessionStore", r.stdout)          # generated tree is NOT injected
         tail = r.stdout.split("(last entry only)")[-1]
         self.assertLessEqual(tail.count("\n"), 45 + 6)                             # +6 for the fixture log entry lines
