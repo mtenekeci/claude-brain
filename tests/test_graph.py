@@ -160,6 +160,27 @@ class GraphCarryOverTests(unittest.TestCase):
         # _system/ is vault infrastructure, deliberately not a graph node — not a broken link
         self.assertFalse([d for d in g.dangling if "_system" in d[1]])
 
+    def test_wikilinks_inside_code_are_not_links(self):
+        """A `[[X]]` in backticks or a fenced block is a syntax EXAMPLE. `graph lint` reported
+        every one of them as a dangling link on this repo's own vault notes."""
+        g = self._build("\n## Linking rules\nWrite `[[concepts/<slug>|<Name>]]`, never plain text.\n\n"
+                        + "`" * 3 + "\nsee:: [[concepts/also-not-real]]\n" + "`" * 3 + "\n")
+        self.assertEqual([d for d in g.dangling if "not-real" in d[1] or "<slug>" in d[1]], [])
+        self.assertEqual(graph.parse_links("a `[[X]]` b"), [])
+        self.assertEqual(graph.parse_links("`x` [[Y]]"), [("links-to", "Y")])
+
+    def test_path_style_link_to_an_existing_vault_file_is_not_dangling(self):
+        """`[[projects/demo/plans/2026-09-08-release]]` is a real note the graph does not model.
+        Resolve it against the vault before calling the link broken."""
+        pdir = os.path.join(self.vault, "projects", "demo", "plans")
+        os.makedirs(pdir)
+        with open(os.path.join(pdir, "2026-09-08-release.md"), "w", encoding="utf-8") as f:
+            f.write("# Release plan\n")
+        g = self._build("\n## Plans\nsee:: [[projects/demo/plans/2026-09-08-release|the plan]] "
+                        "and [[projects/demo/plans/no-such-plan]]\n")
+        self.assertEqual([d for d in g.dangling if "2026-09-08-release" in d[1]], [])
+        self.assertIn(("section:demo/plans", "projects/demo/plans/no-such-plan"), g.dangling)
+
     def test_concept_ids_use_slugified_stem(self):
         with open(os.path.join(self.vault, "concepts", "Auth Flow.md"), "w", encoding="utf-8") as f:
             f.write("---\nconcept: Auth Flow\ntype: subsystem\n---\n\n# Auth Flow\n")

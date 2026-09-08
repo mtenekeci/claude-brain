@@ -110,8 +110,22 @@ def _target(m):
     """Raw link target of a WIKILINK_RE match: 'page' or 'page#Heading'."""
     return m.group(1).strip() + ("#" + m.group(2) if m.group(2) else "")
 
+def _blank(m):
+    """Same-length, newline-preserving blanks — masking must not move any other match's offset."""
+    return re.sub(r"[^\n]", " ", m.group(0))
+
+def mask_code(text):
+    """Blank out fenced blocks and inline code spans.
+
+    A `[[concepts/<slug>|<Name>]]` written inside backticks is a syntax EXAMPLE, not a link:
+    every one of them used to be reported as a dangling link. The mention scan has always
+    stripped both (`_CODE_SPAN_RE` there); the link scan did not.
+    """
+    return _CODE_SPAN_RE.sub(_blank, _FENCE_RE.sub(_blank, text or ""))
+
 def parse_links(text):
     """[(edge_type, raw_target)] in document order. Typed fields win; other wikilinks are links-to."""
+    text = mask_code(text)
     found, spans = [], []
     for m in TYPED_LINK_RE.finditer(text):
         for w in WIKILINK_RE.finditer(m.group(2)):
@@ -172,13 +186,35 @@ def _bullet_title(b):
 # Vault areas the graph deliberately does not model: a link into them is not a broken link.
 _NON_NODE_PREFIXES = ("_system",)
 
-def _link_edges(g, src, text, project_slug):
+def vault_file_exists(vault_root, target):
+    """True when a link target names a real file inside the vault.
+
+    The graph models a fixed set of note shapes (`concepts/<x>`, `projects/<s>/<page>`), but a
+    vault holds more than that — `[[projects/<slug>/plans/2026-09-08-release]]` points at a note
+    that exists and is simply not a node. Resolving against the filesystem before calling a link
+    broken is the difference between "graph lint found a typo" and "graph lint cries wolf".
+    """
+    if not vault_root or not target:
+        return False
+    rel = target if target.endswith(".md") else target + ".md"
+    root = os.path.normpath(vault_root)
+    path = os.path.normpath(os.path.join(root, rel))
+    try:
+        if os.path.commonpath([path, root]) != root:    # a `../` target is not a vault file
+            return False
+    except ValueError:
+        return False
+    return os.path.isfile(path)
+
+def _link_edges(g, src, text, project_slug, vault_root=None):
     for etype, raw in parse_links(text):
         dst = resolve_link(raw, project_slug)
         if dst is None:
             # A bare [[Name]] or an unmodelled path shape. Recorded so `graph lint` can surface
-            # the typo instead of the link vanishing without trace.
-            if raw.partition("#")[0].strip("/").split("/")[0] not in _NON_NODE_PREFIXES:
+            # the typo instead of the link vanishing without trace — unless the target is a real
+            # file in the vault, in which case the link is fine and only the model is narrower.
+            head = raw.partition("#")[0].strip("/")
+            if head.split("/")[0] not in _NON_NODE_PREFIXES and not vault_file_exists(vault_root, head):
                 g.record_dangling(src, raw)
             continue
         if dst.startswith("section:") and not g.has(dst):
@@ -233,7 +269,7 @@ def build_vault_layer(g, vault_root, slug):
         # into `used-by` edges above. Truncating from that heading to EOF also dropped every
         # section a concept note keeps after it (## Notes, ## See also), losing their links.
         body = strip_fences(vt.replace_section(text, "Used by", ""))
-        _link_edges(g, cid, body, slug)
+        _link_edges(g, cid, body, slug, vault_root)
     # decisions / questions
     for sec, ntype in (("Decisions", "decision"), ("Open Questions", "question")):
         for b in vt.bullets(vt.get_section(ctx, sec)):
@@ -242,21 +278,21 @@ def build_vault_layer(g, vault_root, slug):
                 continue
             nid = node_id(ntype, slugify(title))
             g.add_node(Node(nid, ntype, title, path=ctx_path, meta={"section": sec}))
-            g.add_edge(pid, nid, "contains"); _link_edges(g, nid, b, slug)
+            g.add_edge(pid, nid, "contains"); _link_edges(g, nid, b, slug, vault_root)
     # architecture sections
     for lvl, h, ln in _headings(arch):
         sid = node_id("section", "%s/%s" % (slug, slugify(h)))
         g.add_node(Node(sid, "section", h, path=arch_path, meta={"line": ln, "level": lvl}))
         g.add_edge(pid, sid, "contains")
     for hslug, body in _section_bodies(arch).items():
-        _link_edges(g, node_id("section", "%s/%s" % (slug, hslug)), body, slug)
+        _link_edges(g, node_id("section", "%s/%s" % (slug, hslug)), body, slug, vault_root)
     # context.md links, minus the two bullet sections whose links already belong to the
     # decision/question nodes built above — scanning them again duplicated every such edge
     # onto the project node.
     ctx_rest = ctx
     for sec in ("Decisions", "Open Questions"):
         ctx_rest = vt.replace_section(ctx_rest, sec, "")
-    _link_edges(g, pid, strip_fences(ctx_rest), slug)
+    _link_edges(g, pid, strip_fences(ctx_rest), slug, vault_root)
     mention_edges(g, [ctx, arch], slug)
     return g
 
