@@ -185,6 +185,8 @@ def run(vault_root, slug, project_dir, g, all_projects=False, want_duplicates=Fa
             n = gg.nodes[cid]
             if cid.split(":", 1)[1] in dismissed:
                 continue        # dismissal is a standing "no" — auto-apply edits shared concept notes
+            if [s, cid.split(":", 1)[1]] in result["auto_applied"]:
+                continue        # two deps → one concept (jest + @types/jest): count the link once
             if len(result["auto_applied"]) >= AUTO_APPLY_LIMIT:
                 result["auto_pending"] += 1     # deferred to the next run, and reported meanwhile
                 continue

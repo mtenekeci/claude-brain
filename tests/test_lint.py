@@ -66,6 +66,16 @@ class LintTests(unittest.TestCase):
         self.assertNotEqual(vault.read(ctx_path), ctx_before)
         self.assertNotEqual(vault.read(jest_path), jest_before)
 
+    def test_apply_false_counts_a_concept_once_when_two_deps_resolve_to_it(self):
+        layer = codemap.read_layer(self.pdir)
+        layer["deps"] = sorted(set(layer.get("deps", [])) | {"jest", "@types/jest"})   # both → concept:jest
+        codemap.write_layer(self.pdir, layer)
+        res = lint.run(self.vault, "demo", self.repo, self.g, apply=False)
+        self.assertEqual([x for _, x in res["auto_applied"]].count("jest"), 1)
+        self.assertIn("2 links pending", lint.health_line(res))                   # jest + nextauth, not 3
+        res2 = lint.run(self.vault, "demo", self.repo, self.g)                    # real apply agrees
+        self.assertEqual(sorted(res2["auto_applied"]), sorted(res["auto_applied"]))
+
     def test_dismiss_and_health_and_render(self):
         lint.dismiss(self.pdir, "redis")
         res = lint.run(self.vault, "demo", self.repo, self.g)

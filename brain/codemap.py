@@ -193,7 +193,8 @@ def fingerprint(project_dir):
         r = subprocess.run(["git", "-C", project_dir, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3)
         if r.returncode != 0:
             return ""
-        st = subprocess.run(["git", "-C", project_dir, "status", "--porcelain"], capture_output=True, text=True, timeout=5)
+        st = subprocess.run(["git", "-C", project_dir, "-c", "core.quotePath=false", "status", "--porcelain"],
+                            capture_output=True, text=True, timeout=5)  # quotePath: see list_files
         lines = st.stdout.splitlines() if st.returncode == 0 else []
         h = hashlib.md5()
         for line in lines:
