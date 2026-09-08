@@ -72,4 +72,12 @@ def resolve_project(cwd):
         d = parent
 
 def vault_project_dir(vault, slug):
+    """<vault>/projects/<slug>. Raises ValueError on a slug that is not a bare directory name.
+
+    The check lives HERE, not only in the CLI, because it is the one funnel every entry point
+    goes through to turn a slug into a filesystem path — `cli._require_valid_slug` gives the
+    user a clean message, and this makes a caller that forgets it fail loudly instead of
+    writing outside projects/."""
+    if not valid_slug(slug):
+        raise ValueError("invalid slug %r" % (slug,))
     return os.path.join(vault, "projects", slug)

@@ -128,12 +128,32 @@ class ProjectCliTests(unittest.TestCase):
     def test_remove_disconnect_load_reject_path_shaped_slugs(self):
         sentinel = os.path.join(self.vault, "evil"); os.makedirs(sentinel)
         with open(os.path.join(sentinel, "marker"), "w") as f: f.write("keep me")
+        # A context.md here makes `<vault>/projects/../evil` look like a real project to every
+        # command's existence check — so only the slug guard can stop them.
+        with open(os.path.join(sentinel, "context.md"), "w") as f: f.write("---\nproject: evil\npath: —\n---\n")
         rc, out = self._run("remove", "../evil", "--confirm", "../evil")
         self.assertEqual(rc, 1); self.assertIn("invalid slug", out)
         self.assertTrue(os.path.exists(os.path.join(sentinel, "marker")))
         self.assertTrue(os.path.exists(self.pdir))
         rc, out = self._run("disconnect", "../x"); self.assertEqual(rc, 1); self.assertIn("invalid slug", out)
         rc, out = self._run("load", "../x"); self.assertEqual(rc, 1); self.assertIn("invalid slug", out)
+        # repair builds <vault>/projects/<slug>/ too — an unchecked '../evil' wrote codemap.md
+        # and .brain/ outside projects/ and left CLAUDE.md holding an unmatchable `brain:` line.
+        original_claude_md = vault.read(os.path.join(self.repo, "CLAUDE.md"))
+        rc, out = self._run("repair", "--slug", "../evil"); self.assertEqual(rc, 1)
+        self.assertIn("invalid slug", out)
+        self.assertEqual(sorted(os.listdir(sentinel)), ["context.md", "marker"])
+        self.assertEqual(vault.read(os.path.join(self.repo, "CLAUDE.md")), original_claude_md)
+
+    def test_load_ignores_a_path_shaped_slug_in_a_concept_used_by_list(self):
+        """`_USED_BY_LINK_RE`'s `[^/\\]]+` admits `..`, and these slugs are joined onto a vault
+        path — vault-authored is not the same as trusted."""
+        with open(os.path.join(self.vault, "context.md"), "w") as f: f.write("SECRET\n")
+        cpath = os.path.join(self.vault, "concepts", "nextauth.md")
+        vault.write(cpath, vault.read(cpath) + "- [[projects/../context|evil]] — nope\n")
+        rc, out = self._run("load", "nextauth")
+        self.assertNotIn("SECRET", out)
+        self.assertIn("stale link", out)
 
     def test_clean_orphans_reports_a_deletion_failure_honestly(self):
         orphan_dir = os.path.join(self.tmp.name, ".claude", "brain-broken.sh")

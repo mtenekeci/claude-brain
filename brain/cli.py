@@ -402,7 +402,9 @@ def _cmd_load(args):
             used_by = vault.get_section(ctext, "Used by")
             valid = []
             for s in _USED_BY_LINK_RE.findall(used_by):
-                if os.path.exists(os.path.join(vault_root, "projects", s, "context.md")):
+                # Vault-authored, but the same class as a user-supplied slug: the link regex's
+                # `[^/\]]+` admits `..`, and these slugs go straight into a vault path below.
+                if _require_valid_slug(s) is None and os.path.exists(os.path.join(vault_root, "projects", s, "context.md")):
                     valid.append(s)
                     if s not in seen:
                         seen.add(s); resolved.append(s)
@@ -559,6 +561,9 @@ def _cmd_repair(args):
     if vault_root is None:
         return 2
     slug = args.slug
+    err = _require_valid_slug(slug)
+    if err:
+        print(err); return 1
     pdir = project.vault_project_dir(vault_root, slug)
     ctx_path = os.path.join(pdir, "context.md")
     if not os.path.exists(ctx_path):
