@@ -165,3 +165,82 @@ class PostToolUseDeliveryTests(unittest.TestCase):
                            capture_output=True, env=dict(os.environ))
         out = _json.loads(r.stdout)                            # exactly one JSON document, no stray text
         self.assertIn("commit landed", out["hookSpecificOutput"]["additionalContext"])
+
+class BashVaultWriteTests(unittest.TestCase):
+    """A vault edit made through the shell (heredoc, `sed -i`, `{BRAIN} sync`) never passes
+    through Edit/Write. Before mtime arbitration the Stop gate never saw it, so
+    commits_since_vault_write stayed armed and the gate re-fired against a current vault."""
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = make_vault(self.tmp.name, slug="demo")
+        write_config(self.tmp.name, self.vault)
+        self.repo = make_project(self.tmp.name, slug="demo")
+        self.pdir = os.path.join(self.vault, "projects", "demo")
+        self.context = os.path.join(self.pdir, "context.md")
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.clear(); os.environ.update(self._env)
+
+    def _post(self, tool, **tool_input):
+        return hooks.dispatch("PostToolUse", payload("PostToolUse", self.repo, tool_name=tool,
+                                                     tool_input=tool_input, tool_response={}))
+
+    def _touch_later(self, path, body=None):
+        """Write and stamp the mtime forward, so the test never depends on filesystem clock
+        granularity to notice a change that happened milliseconds ago."""
+        if body is not None:
+            with open(path, "a") as f: f.write(body)
+        t = os.stat(path).st_mtime + 10
+        os.utime(path, (t, t))
+
+    def _commit(self, msg):
+        with open(os.path.join(self.repo, "c.py"), "a") as f: f.write("# %s\n" % msg)
+        subprocess.run(["git", "-C", self.repo, "add", "."], check=True)
+        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", msg], check=True)
+        return self._post("Bash", command="git commit -m '%s'" % msg)
+
+    def _armed(self):
+        return state.SessionState.load("s1").commits_since_vault_write
+
+    def test_first_bash_call_adopts_baseline_without_counting_a_write(self):
+        self._post("Bash", command="ls")
+        s = state.SessionState.load("s1")
+        self.assertEqual(s.vault_writes, 0)
+        self.assertGreater(s.vault_mtime_seen, 0.0)
+
+    def test_shell_vault_write_clears_the_gate(self):
+        hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        self._commit("feat: thing")
+        self.assertEqual(self._armed(), 1)
+        self._touch_later(self.context, "\nupdated by a heredoc\n")
+        self._post("Bash", command="cat >> %s <<'EOF'\nx\nEOF" % self.context)
+        self.assertEqual(self._armed(), 0)
+        self.assertEqual(state.SessionState.load("s1").vault_writes, 1)
+
+    def test_plugin_frontmatter_write_does_not_clear_the_gate(self):
+        """The commit handler rewrites context.md's `branch:` itself. That is the plugin's own
+        bookkeeping, not the user's vault update, and must not disarm the commit it just armed."""
+        hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        subprocess.run(["git", "-C", self.repo, "checkout", "-q", "-b", "feat/beta"], check=True)
+        self._commit("feat: thing")
+        self.assertEqual(self._armed(), 1)
+        self._post("Bash", command="ls")            # nothing touched the vault since
+        self.assertEqual(self._armed(), 1)
+
+    def test_brain_cache_writes_do_not_count(self):
+        hooks.dispatch("SessionStart", payload("SessionStart", self.repo))
+        self._commit("feat: thing")
+        cache = os.path.join(self.pdir, ".brain")
+        os.makedirs(cache, exist_ok=True)
+        with open(os.path.join(cache, "graph.json"), "w") as f: f.write("{}")
+        self._touch_later(os.path.join(cache, "graph.json"))
+        self._post("Bash", command="ls")
+        self.assertEqual(self._armed(), 1)
+
+    def test_tool_write_does_not_double_count_on_the_next_bash_call(self):
+        self._post("Bash", command="ls")            # adopt baseline
+        self._touch_later(self.context, "\nx\n")
+        self._post("Edit", file_path=self.context)
+        self._post("Bash", command="ls")
+        self.assertEqual(state.SessionState.load("s1").vault_writes, 1)

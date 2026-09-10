@@ -386,15 +386,53 @@ def _vault_notes_reminder(ctx):
     return ("Brain: subagent reported vault notes — fold them into %s / codemap.md ## Modules now "
             "(a concept note only if you'd link it from more than one place).\n" % ctx.arch_path)
 
+def vault_mtime(pdir):
+    """Newest .md mtime under the vault project dir, or 0.0 if there is nothing to stat.
+    Dot-directories are skipped: `.brain/` holds the graph cache the plugin writes itself, and
+    counting that as a vault update would clear the Stop gate on the plugin's own bookkeeping."""
+    newest = 0.0
+    for root, dirs, files in os.walk(pdir):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for f in files:
+            if not f.endswith(".md"):
+                continue
+            try:
+                m = os.stat(os.path.join(root, f)).st_mtime
+            except OSError:
+                continue
+            if m > newest:
+                newest = m
+    return newest
+
 def _prepare_post_tool_use(ctx):
-    """Runs BEFORE the session lock: all git subprocess calls and config reads for this event."""
+    """Runs BEFORE the session lock: all git subprocess calls, stats and config reads for this event."""
     ti = ctx.payload.get("tool_input") or {}
     tool = str(ctx.payload.get("tool_name") or "")
     if tool in ("Edit", "Write", "MultiEdit"):
         return {"async_regen": config.async_regen()}
-    if tool != "Bash" or not is_git_commit(str(ti.get("command") or "")):
+    if tool != "Bash":
         return {}
-    return {"sha": gitinfo.head_sha(ctx.cwd), "branch": gitinfo.current_branch(ctx.cwd), "subject": gitinfo.last_subject(ctx.cwd)}
+    # PostToolUse runs after the command did its work, so this stat already reflects any vault
+    # file the command touched.
+    pre = {"vault_mtime": vault_mtime(ctx.pdir)}
+    if is_git_commit(str(ti.get("command") or "")):
+        pre.update(sha=gitinfo.head_sha(ctx.cwd), branch=gitinfo.current_branch(ctx.cwd),
+                   subject=gitinfo.last_subject(ctx.cwd))
+    return pre
+
+def _note_bash_vault_write(ctx):
+    """Count a vault edit made through the shell — a heredoc, `sed -i`, `{BRAIN} sync`. None of
+    those pass through Edit/Write, so tool-name detection misses them and
+    `commits_since_vault_write` never clears; the gate then re-fires against a vault that is
+    already current. Arbitrate on mtime, the way commits arbitrate on HEAD: whatever moved the
+    newest mtime, it was a write. The first Bash call of a session adopts the baseline without
+    counting it — there is nothing yet to compare against."""
+    m = ctx.pre.get("vault_mtime") or 0.0
+    seen = ctx.state.vault_mtime_seen
+    if m:
+        ctx.state.vault_mtime_seen = m
+    if seen and m > seen:
+        ctx.state.note_vault_write()
 
 # Both names for a subagent dispatch: `Agent` is the documented tool name, `Task` is what
 # several Claude Code builds actually put in tool_name. hooks/hooks.json matches both.
@@ -411,6 +449,9 @@ def on_post_tool_use(ctx):
             return HookResult(_vault_notes_reminder(ctx))
         return EMPTY
     if tool == "Bash":
+        # Before the commit accounting below: a command that updated the vault AND committed
+        # still leaves the gate armed for that commit, which is the conservative reading.
+        _note_bash_vault_write(ctx)
         cmd = str(ti.get("command") or "")
         if is_git_commit(cmd):
             pre = ctx.pre                         # gathered by _prepare_post_tool_use, outside the lock
@@ -425,6 +466,9 @@ def on_post_tool_use(ctx):
                 fm, _ = vault.parse_frontmatter(text)
                 if fm.get("branch") != branch:
                     vault.write(ctx.context_path, vault.set_frontmatter(text, "branch", branch))
+                    # Our own write. Re-baseline, or the next Bash call reads it as the user
+                    # updating the vault and clears the gate this commit just armed.
+                    ctx.state.vault_mtime_seen = vault_mtime(ctx.pdir)
             return HookResult("Brain: commit landed — update ## State and ## Active Work in %s before continuing.\n" % ctx.context_path)
         hit = False
         for p in bash_read_targets(cmd):
@@ -442,6 +486,9 @@ def on_post_tool_use(ctx):
         p = _abs(ctx, str(ti.get("file_path") or ""))
         if under(p, ctx.vault):
             ctx.state.note_vault_write()
+            # Keep the shell-side baseline level with the write we just counted, so the next
+            # Bash call does not count this same edit a second time.
+            ctx.state.vault_mtime_seen = vault_mtime(ctx.pdir)
         elif is_source_path(p) and under(p, ctx.project.project_dir):
             ctx.state.note_source_edit(p)
             # Decided (and rate-limited) under the lock because it reads session state; spawned

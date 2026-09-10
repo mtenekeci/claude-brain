@@ -1,7 +1,7 @@
 {
   "name": "brain",
   "description": "Obsidian second brain for Claude — persistent project context, a derived knowledge graph over your notes and code, and a per-project code map, across every session",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "author": {
     "name": "Mehmet Tenekeci",
     "email": "mehmet@tenekeci.ch"
