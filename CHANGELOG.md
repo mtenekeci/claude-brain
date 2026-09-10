@@ -4,6 +4,23 @@ All notable changes to claude-brain are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.0.3
+
+The Stop gate re-fired against a vault that was already up to date. It counted a vault write
+only when it arrived through the `Edit`/`Write`/`MultiEdit` tools, so an update written through
+the shell — a heredoc, `sed -i`, `{BRAIN} sync` — left `commits_since_vault_write` armed and the
+next commit blocked again. The one-block-per-turn cap hid it inside a turn, which is why it
+surfaced as an occasional "Stop hook error" rather than as a consistent one.
+
+### Fixed
+
+- Vault writes are now arbitrated on mtime rather than on the tool that made them, matching how
+  commit detection already arbitrates on HEAD: any forward move of the newest `.md` mtime under
+  the vault project directory counts, whatever wrote it. `.brain/` is excluded so the plugin's
+  own graph-cache regeneration cannot clear the gate, and both the commit handler's `branch:`
+  frontmatter write and tool-mediated vault edits re-baseline, so the plugin never reads its own
+  writes — or the same edit twice — as a vault update.
+
 ## 2.0.2
 
 Concept relevance. Measured on a 21-concept vault: only 2–3 of the 12 "most-connected nodes"

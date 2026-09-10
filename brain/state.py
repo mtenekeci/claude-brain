@@ -17,6 +17,10 @@ _DEFAULTS = dict(
     # holds the codemap freshness key SessionStart last spawned a build for, so `compact` and
     # `resume` — which re-fire SessionStart against this same state file — spawn at most one.
     last_regen_spawn_at=0.0, regen_spawned_for="",
+    # vault_mtime_seen: newest .md mtime under the vault project dir as of the last Bash call.
+    # A vault edit made through the shell never passes through Edit/Write, so it is arbitrated
+    # on mtime the way a commit is arbitrated on HEAD. 0.0 means "no baseline adopted yet".
+    vault_mtime_seen=0.0,
 )
 
 def _sessions_dir():
