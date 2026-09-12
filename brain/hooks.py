@@ -62,6 +62,21 @@ def resolve_ctx(payload):
         return None
     return Ctx(payload, proj, vault_root)
 
+# Ceiling on how long dispatch() waits for the session lock, per event, in seconds. Every event
+# has one: an unbounded wait is indistinguishable from a hang, and Claude Code's own hook
+# deadline is then the only thing that ends it — at which point the output is discarded anyway,
+# so waiting past the budget buys nothing and costs the whole event. Each budget leaves the rest
+# of that event's hook timeout (hooks/hooks.json) for the handler's own work. Peers hold the
+# lock for ~1 ms, since the slow work happens in prepare() before it, so these are ~1000x the
+# contention we expect to see and should never trip in normal use.
+_LOCK_WAIT = {
+    "SessionEnd": 0.5,          # 1 s deadline: never wait on a peer at all
+    "SessionStart": 6.0,        # 10 s deadline
+    "PreCompact": 6.0,          # 10 s deadline
+    "UserPromptSubmit": 10.0,   # 15 s deadline
+}
+_LOCK_WAIT_DEFAULT = 3.0        # the 5 s-deadline events: PostToolUse, Stop, PreToolUse, SubagentStart
+
 def dispatch(event, payload):
     try:
         handler = _HANDLERS.get(event)
@@ -75,11 +90,18 @@ def dispatch(event, payload):
         prepare = getattr(handler, "prepare", None)
         if prepare is not None:
             ctx.pre = prepare(ctx) or {}
-        # SessionEnd runs against a 1 s hook timeout: never wait on a peer that holds the lock.
-        timeout = 0.5 if event == "SessionEnd" else None
-        with state.locked(ctx.session_id, timeout=timeout) as s:
-            ctx.attach_state(s)
-            result = handler(ctx)
+        timeout = _LOCK_WAIT.get(event, _LOCK_WAIT_DEFAULT)
+        try:
+            with state.locked(ctx.session_id, timeout=timeout) as s:
+                ctx.attach_state(s)
+                result = handler(ctx)
+        except state.LockBusy:
+            # Skipping loses this event's state update — a retrieval, an edit count, a gate
+            # check. That is the lesser loss: the alternative is to keep waiting until Claude
+            # Code kills the hook, which discards the same output and stalls the turn to boot.
+            # Logged rather than silent so a real contention bug stays visible in brain.log.
+            config.log_error("%s skipped: session lock busy after %.1fs" % (event, timeout))
+            return EMPTY
         result = _deliverable(event, result or EMPTY)
         if result.after_lock is not None:
             try:
@@ -144,7 +166,10 @@ def _finish_regen_spawn(session_id, project_dir, key):
     if _spawn_regen_process(project_dir, force=True):
         return
     try:
-        with state.locked(session_id) as s:
+        # Bounded like every other acquisition: this runs after the main lock is released but
+        # still inside the hook process, so an unbounded wait here would spend the deadline the
+        # event has already earned. Losing the undo only costs a retry of a background rebuild.
+        with state.locked(session_id, timeout=_LOCK_WAIT_DEFAULT) as s:
             if s.regen_spawned_for == key:      # only undo OUR claim, never a newer one
                 s.regen_spawned_for = ""
                 s.last_regen_spawn_at = 0.0
