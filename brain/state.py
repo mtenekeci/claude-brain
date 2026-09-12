@@ -94,6 +94,13 @@ class SessionState(object):
         self.commits_since_vault_write = 0
         self.source_edits_since_vault_write = 0
 
+class LockBusy(BlockingIOError):
+    """A peer still held the session lock when the caller's budget ran out.
+
+    A BlockingIOError subclass so callers that only care about contention keep working, but a
+    distinct type so a caller can tell "the lock was busy" from a BlockingIOError raised by
+    unrelated I/O inside the locked block."""
+
 def _acquire_with(try_lock, timeout):
     """try_lock(fd_placeholder) raises OSError when the lock is unavailable. EAGAIN/EWOULDBLOCK → retry until timeout;
     any other errno → re-raise immediately (a real lock failure, not contention)."""
@@ -106,13 +113,13 @@ def _acquire_with(try_lock, timeout):
             if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
                 raise
             if time.time() >= deadline:
-                raise BlockingIOError(errno.EAGAIN, "lock busy")
+                raise LockBusy(errno.EAGAIN, "lock busy")
             time.sleep(0.05)
 
 def _acquire(lock, timeout):
     """Blocking flock when timeout is None; otherwise poll LOCK_NB until the deadline
-    and raise BlockingIOError. Callers on a hard deadline (SessionEnd) pass a timeout so
-    a stuck peer can never hang the hook."""
+    and raise LockBusy. Every hook passes a timeout (see hooks._LOCK_WAIT) so a stuck peer
+    can never hang one; timeout=None is for callers with no deadline of their own."""
     if timeout is None:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         return
@@ -121,7 +128,7 @@ def _acquire(lock, timeout):
 @contextlib.contextmanager
 def locked(session_id, timeout=None):
     """Exclusive read-modify-write of one session's state. Holds the lock for the whole block.
-    With timeout set, raises BlockingIOError instead of waiting indefinitely."""
+    With timeout set, raises LockBusy instead of waiting indefinitely."""
     probe = SessionState(session_id)
     lock_path = probe.path + ".lock"
     with open(lock_path, "a") as lock:

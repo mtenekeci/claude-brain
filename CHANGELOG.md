@@ -4,6 +4,31 @@ All notable changes to claude-brain are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.0.4
+
+`UserPromptSubmit` was repeatedly killed at its deadline — "UserPromptSubmit hook timed out after
+5s — output discarded" — which drops that turn's entire graph retrieval. Measured on this repo the
+handler costs ~50 ms warm and ~70 ms with the graph cache deleted (a full rebuild is ~25 ms), so
+the retrieval work was not what missed the deadline. The cause was on the other side of the
+session lock: every event except `SessionEnd` waited for it indefinitely, so one slow holder
+turned each peer into a hook that ran until Claude Code killed it. Bursts of parallel
+`Edit`/`Write`/`Bash` calls — many `PostToolUse` hooks arriving on one session id at once — are
+where that contention comes from.
+
+### Changed
+
+- Waiting for the session lock is bounded per event (`hooks._LOCK_WAIT`), sized to leave the
+  handler the rest of that event's hook timeout. On expiry the event logs
+  `<event> skipped: session lock busy after <n>s` to `brain.log` and returns nothing, rather than
+  waiting to be killed — the same output is lost either way, and the skip does not also stall the
+  turn. Peers hold the lock for ~1 ms, since each handler does its slow work in `prepare()`
+  beforehand, so the budgets are ~1000× the expected contention. `Stop` fails open: its gate
+  needs session state to decide, so blocking on none would block turn end on no evidence, and the
+  `stop_hook_active` re-entry would still find none.
+- `UserPromptSubmit`'s hook timeout is raised from 5 s to 15 s, so a burst has room to drain
+  before the deadline. No prompt pays extra latency for it: the graph load happens before the
+  lock, and the larger deadline is only ever reached in the pathological case.
+
 ## 2.0.3
 
 The Stop gate re-fired against a vault that was already up to date. It counted a vault write
